@@ -540,9 +540,6 @@ export class CitationAnalysisStack extends cdk.Stack {
     // Grant Crawler Lambda write access to Screenshots bucket
     screenshotsBucket.grantWrite(crawlerLambdaRole);
 
-    // Grant Crawler Lambda read access to Nova Act secret (for intelligent verification handling)
-    novaActSecret.grantRead(crawlerLambdaRole);
-
     // IAM Role for Step Functions State Machine
     // Permissions: Invoke all Lambda functions
     const stepFunctionsRole = new iam.Role(this, 'StepFunctionsRole', {
@@ -747,11 +744,8 @@ export class CitationAnalysisStack extends cdk.Stack {
       environment: {
         DYNAMODB_TABLE_CRAWLED_CONTENT: crawledContentTable.tableName,
         BEDROCK_MODEL_ID: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
-        BROWSER_TIMEOUT_MS: '30000',
         SCREENSHOTS_BUCKET: screenshotsBucket.bucketName,
-        PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1', // Use AgentCore managed browsers
         BROWSER_ID: crawlerBrowser.attrBrowserId, // Pre-created browser with Web Bot Auth
-        NOVA_ACT_SECRET_NAME: 'citation-analysis/nova-act-key', // Nova Act for verification handling
       },
     });
 
@@ -847,7 +841,10 @@ export class CitationAnalysisStack extends cdk.Stack {
       maxConcurrency: 3,
       itemsPath: '$.deduplicated_citations',
       resultPath: '$.crawled_results',
-      itemSelector: {'citation.$': '$$.Map.Item.Value',},
+      itemSelector: {
+        'citation.$': '$$.Map.Item.Value',
+        'keyword.$': '$.keyword',
+      },
     }).itemProcessor(crawlTask);
 
     // 6. Chain Search -> Deduplication -> Crawl

@@ -691,6 +691,12 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     citation = event.get('citation', {})
     url = citation.get('normalized_url')
     
+    # keyword is passed at the top level by the Map itemSelector,
+    # not inside the citation object from deduplication
+    keyword_override = event.get('keyword', '')
+    if keyword_override:
+        citation['keyword'] = keyword_override
+    
     if not url:
         error = ValueError("Missing required parameter: normalized_url")
         log_error(error, "crawler handler", event)

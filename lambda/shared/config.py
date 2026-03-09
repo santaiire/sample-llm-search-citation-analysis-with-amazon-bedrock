@@ -71,8 +71,8 @@ class LambdaConfig:
     # AWS Configuration
     region: str = os.environ.get("AWS_REGION", "us-west-2")
     
-    # LLM Model for summarization
-    llm_model_id: str = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    # LLM Model for summarization (configurable via environment variable)
+    llm_model_id: str = os.environ.get('BEDROCK_MODEL_ID', 'global.anthropic.claude-sonnet-4-5-20250929-v1:0')
     
     # Get AWS Account ID automatically
     @property
@@ -100,7 +100,7 @@ class LambdaConfig:
     
     @property
     def crawled_content_table(self) -> str:
-        return os.environ.get('CRAWLED_CONTENT_TABLE', 'CitationAnalysis-CrawledContent')
+        return os.environ.get('DYNAMODB_TABLE_CRAWLED_CONTENT', 'CitationAnalysis-CrawledContent')
     
     # Secrets Manager prefix
     secrets_prefix: str = "citation-analysis/"
