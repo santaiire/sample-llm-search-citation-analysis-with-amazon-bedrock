@@ -796,6 +796,7 @@ export class CitationAnalysisStack extends cdk.Stack {
       payload: stepfunctions.TaskInput.fromObject({
         'keyword.$': '$.keyword',
         'timestamp.$': '$.timestamp',
+        'query_prompts.$': '$.query_prompts',
       }),
       outputPath: '$.Payload',
       retryOnServiceExceptions: true,
