@@ -188,6 +188,8 @@ Go to **Settings > AI Providers**. The system supports four providers:
 
 You need at least one provider configured with a valid API key. OpenAI is recommended as the primary provider. The system skips providers with placeholder or invalid keys and falls through to the next available one.
 
+> **Paid API keys are required.** This tool analyses the AI providers you want to track, which means it calls their APIs at scale. Free tiers are designed for single API calls and will hit rate limits immediately under any real analysis workload. A small amount of paid credit per provider ($5-10) is more than enough for regular use.
+
 For each provider you want to use:
 1. Click **Add Key** and enter your API key
 2. Toggle the switch to enable the provider
