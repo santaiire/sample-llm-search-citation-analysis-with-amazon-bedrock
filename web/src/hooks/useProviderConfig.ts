@@ -101,7 +101,7 @@ function createDefaultProviders(): ProviderConfig[] {
       id: PROVIDER.GEMINI,
       name: PROVIDER_NAMES[PROVIDER.GEMINI],
       description: PROVIDER_DESCRIPTIONS[PROVIDER.GEMINI],
-      model: 'gemini-2.0-flash',
+      model: 'gemini-2.5-flash',
       docs_url: PROVIDER_DOCS_URLS[PROVIDER.GEMINI],
       enabled: true,
       configured: false,

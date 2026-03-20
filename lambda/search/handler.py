@@ -190,7 +190,7 @@ def is_provider_enabled(provider_id: str) -> bool:
 DEFAULT_PROVIDER_MODELS = {
     Provider.OPENAI: 'gpt-5-mini',
     Provider.PERPLEXITY: 'sonar',
-    Provider.GEMINI: 'gemini-2.0-flash',
+    Provider.GEMINI: 'gemini-2.5-flash',
     Provider.CLAUDE: 'claude-sonnet-4-5',
 }
 
@@ -429,7 +429,7 @@ def query_gemini(keyword: str, api_key: str, query_template: Optional[str] = Non
             "status": "success",
             "raw_response": raw_response,
             "metadata": {
-                "model": "gemini-2.0-flash",
+                "model": "gemini-2.5-flash",
                 "latency_ms": latency_ms,
                 "usage": raw_response.get('usageMetadata', {})
             }
@@ -443,7 +443,7 @@ def query_gemini(keyword: str, api_key: str, query_template: Optional[str] = Non
             "status": "error",
             "error": str(e),
             "raw_response": None,
-            "metadata": {"model": "gemini-2.0-flash", "latency_ms": int((time.time() - start_time) * 1000)}
+            "metadata": {"model": "gemini-2.5-flash", "latency_ms": int((time.time() - start_time) * 1000)}
         }
 
 

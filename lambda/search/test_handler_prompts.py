@@ -109,7 +109,7 @@ class TestGetProviderModel:
             handler._provider_model_cache.clear()
             assert handler.get_provider_model('perplexity') == 'sonar'
             handler._provider_model_cache.clear()
-            assert handler.get_provider_model('gemini') == 'gemini-2.0-flash'
+            assert handler.get_provider_model('gemini') == 'gemini-2.5-flash'
 
 
 class TestQueryOpenAIModel:

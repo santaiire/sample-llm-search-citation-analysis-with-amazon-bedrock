@@ -171,8 +171,8 @@ class GeminiClient:
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.base_url = "https://generativelanguage.googleapis.com/v1beta"
-        # Use gemini-2.0-flash for reliable grounding with citations
-        self.model = "gemini-2.0-flash"
+        # Use gemini-2.5-flash for reliable grounding with citations
+        self.model = "gemini-2.5-flash"
     
     @retry_with_backoff(provider_name="GEMINI", timeout=60)
     def _make_request(self, payload: Dict, timeout: int = 60) -> requests.Response:
