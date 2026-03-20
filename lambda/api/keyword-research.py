@@ -152,7 +152,7 @@ class GeminiClient:
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.base_url = "https://generativelanguage.googleapis.com/v1beta"
-        self.model = "gemini-2.0-flash"
+        self.model = "gemini-2.5-flash"
     
     def search(self, query: str) -> Dict[str, Any]:
         """Execute search with Google Search grounding."""

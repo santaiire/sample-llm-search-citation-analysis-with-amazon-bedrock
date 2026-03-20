@@ -59,7 +59,7 @@ PROVIDERS = {
         'description': 'Gemini Flash with Google Search grounding',
         'secret_name': f'{SECRETS_PREFIX}gemini-key',
         'docs_url': 'https://aistudio.google.com/apikey',
-        'model': 'gemini-2.0-flash',
+        'model': 'gemini-2.5-flash',
         'type': PROVIDER_TYPE_LLM
     },
     'claude': {
