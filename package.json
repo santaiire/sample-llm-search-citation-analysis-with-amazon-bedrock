@@ -13,7 +13,8 @@
     "deploy:cdk": "cdk deploy --require-approval never",
     "deploy:full": "npm run deploy:cdk && npm run clear-cache",
     "clear-cache": "bash scripts/clear-cloudfront-cache.sh",
-    "synth": "cdk synth"
+    "synth": "cdk synth",
+    "test": "vitest run"
   },
   "keywords": [
     "cdk",
@@ -40,7 +41,8 @@
     "source-map-support": "^0.5.21",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.0",
-    "typescript-eslint": "^8.58.0"
+    "typescript-eslint": "^8.58.0",
+    "vitest": "^4.1.2"
   },
   "dependencies": {
     "aws-cdk-lib": "^2.245.0",
