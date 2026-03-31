@@ -611,10 +611,14 @@ export class CitationAnalysisStack extends cdk.Stack {
       memorySize: 256,
       description: 'Parse keywords from S3 or direct input',
       logGroup: parseKeywordsLogGroup,
+      environment: {
+        KEYWORDS_TABLE: keywordsTable.tableName,
+      },
     });
 
-    // Grant ParseKeywords Lambda read access to keywords bucket
+    // Grant ParseKeywords Lambda read access to keywords bucket and table
     keywordsBucket.grantRead(parseKeywordsFunction);
+    keywordsTable.grantReadData(parseKeywordsFunction);
 
     // Search Lambda Function
     const searchLogGroup = new logs.LogGroup(this, 'SearchLogGroup', {

@@ -9,7 +9,9 @@ Requirements: 2.1, 2.2, 2.3, 2.4
 
 import json
 import logging
+import os
 import boto3
+from boto3.dynamodb.conditions import Key
 from datetime import datetime
 from typing import Dict, List, Any
 from urllib.parse import urlparse
@@ -23,6 +25,24 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 s3_client = boto3.client('s3')
+dynamodb = boto3.resource('dynamodb')
+
+KEYWORDS_TABLE = os.environ.get('KEYWORDS_TABLE', 'CitationAnalysis-Keywords')
+
+
+def read_keywords_from_dynamodb() -> List[str]:
+    """Read active keywords from DynamoDB Keywords table."""
+    try:
+        table = dynamodb.Table(KEYWORDS_TABLE)
+        response = table.query(
+            IndexName='StatusIndex',
+            KeyConditionExpression=Key('status').eq('active')
+        )
+        keywords = [item['keyword'] for item in response.get('Items', []) if item.get('keyword')]
+        logger.info(f"Read {len(keywords)} active keywords from DynamoDB")
+        return keywords
+    except Exception as e:
+        raise Exception(f"Failed to read keywords from DynamoDB: {str(e)}")
 
 
 def parse_s3_uri(s3_uri: str) -> tuple:
@@ -97,24 +117,29 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         keywords = []
         timestamp = datetime.utcnow().isoformat() + 'Z'
         
-        # Case 1: Keywords from S3 file
-        if 'keywords_file' in event:
+        # Case 1: Keywords from DynamoDB (scheduled runs)
+        if event.get('source') == 'dynamodb':
+            logger.info("Reading active keywords from DynamoDB (scheduled run)")
+            keywords = read_keywords_from_dynamodb()
+
+        # Case 2: Keywords from S3 file
+        elif 'keywords_file' in event:
             s3_uri = event['keywords_file']
             logger.info(f"Reading keywords from S3: {s3_uri}")
             keywords = read_keywords_from_s3(s3_uri)
         
-        # Case 2: Direct keywords array
+        # Case 3: Direct keywords array
         elif 'keywords' in event and isinstance(event['keywords'], list):
             logger.info("Using keywords from direct array input")
             keywords = event['keywords']
         
-        # Case 3: Direct keywords string (newline-separated)
+        # Case 4: Direct keywords string (newline-separated)
         elif 'keywords' in event and isinstance(event['keywords'], str):
             logger.info("Parsing keywords from string input")
             keywords = event['keywords'].split('\n')
         
         else:
-            error = ValueError("Invalid input: must provide 'keywords_file' (S3 URI) or 'keywords' (array/string)")
+            error = ValueError("Invalid input: must provide 'source': 'dynamodb', 'keywords_file' (S3 URI), or 'keywords' (array/string)")
             log_error(error, "parse keywords handler", event)
             raise error
         
