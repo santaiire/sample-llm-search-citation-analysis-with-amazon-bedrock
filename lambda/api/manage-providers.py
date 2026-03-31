@@ -59,7 +59,7 @@ PROVIDERS = {
         'description': 'Gemini Flash with Google Search grounding',
         'secret_name': f'{SECRETS_PREFIX}gemini-key',
         'docs_url': 'https://aistudio.google.com/apikey',
-        'model': 'gemini-2.5-flash',
+        'model': 'gemini-3-flash-preview',
         'type': PROVIDER_TYPE_LLM
     },
     'claude': {
@@ -134,7 +134,7 @@ def get_secret_status(secret_name: str) -> dict:
     except ClientError as e:
         if e.response['Error']['Code'] == 'ResourceNotFoundException':
             return {'exists': False, 'has_value': False, 'masked_key': None}
-        logger.error(f"Error checking provider status: {str(e)}")
+        logger.error("Error checking secret: %s", str(e))
         return {'exists': False, 'has_value': False}
 
 

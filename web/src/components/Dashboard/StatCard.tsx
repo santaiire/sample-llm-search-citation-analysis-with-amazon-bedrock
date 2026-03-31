@@ -27,17 +27,41 @@ const iconMap: Record<string, JSX.Element> = {
   ),
 };
 
-const colorMap: Record<string, { bg: string; text: string; border: string }> = {
-  '🔍': { bg: 'bg-blue-50', text: 'text-blue-600', border: 'border-blue-100' },
-  '📎': { bg: 'bg-violet-50', text: 'text-violet-600', border: 'border-violet-100' },
-  '🕷️': { bg: 'bg-emerald-50', text: 'text-emerald-600', border: 'border-emerald-100' },
-  '🔑': { bg: 'bg-amber-50', text: 'text-amber-600', border: 'border-amber-100' },
+const colorMap: Record<string, {
+  bg: string;
+  text: string;
+  border: string 
+}> = {
+  '🔍': {
+    bg: 'bg-blue-50',
+    text: 'text-blue-600',
+    border: 'border-blue-100' 
+  },
+  '📎': {
+    bg: 'bg-violet-50',
+    text: 'text-violet-600',
+    border: 'border-violet-100' 
+  },
+  '🕷️': {
+    bg: 'bg-emerald-50',
+    text: 'text-emerald-600',
+    border: 'border-emerald-100' 
+  },
+  '🔑': {
+    bg: 'bg-amber-50',
+    text: 'text-amber-600',
+    border: 'border-amber-100' 
+  },
 };
 
 export const StatCard = ({
   title, value, icon 
 }: StatCardProps) => {
-  const colors = colorMap[icon] ?? { bg: 'bg-gray-50', text: 'text-gray-500', border: 'border-gray-100' };
+  const colors = colorMap[icon] ?? {
+    bg: 'bg-gray-50',
+    text: 'text-gray-500',
+    border: 'border-gray-100' 
+  };
 
   return (
     <div className={`bg-white rounded-lg border ${colors.border} p-6`}>

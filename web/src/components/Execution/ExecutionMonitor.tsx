@@ -65,12 +65,14 @@ export const ExecutionMonitor = ({
       try {
         const provResp = await authenticatedFetch(`${API_BASE_URL}/providers`);
         if (provResp.ok) {
-          const data = await provResp.json() as { providers: Array<{
-            name: string;
-            enabled: boolean;
-            configured: boolean;
-            type: string;
-          }> };
+          const data = await provResp.json() as {
+            providers: Array<{
+              name: string;
+              enabled: boolean;
+              configured: boolean;
+              type: string;
+            }> 
+          };
           const llmProviders = (data.providers ?? []).filter(p => p.type === 'llm');
           const ready = llmProviders.filter(p => p.enabled && p.configured);
           if (ready.length === 0) {

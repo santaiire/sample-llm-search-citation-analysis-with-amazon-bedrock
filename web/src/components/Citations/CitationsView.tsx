@@ -19,6 +19,9 @@ import {
   safeJsonParse,
   fetchBreakdownData 
 } from '../../exporters/citationParser';
+import type {
+  SortColumn, SortConfig 
+} from '../../exporters/citationParser';
 import { exportToExcel } from '../../exporters/excelGenerator';
 
 interface CitationsViewProps {
@@ -66,7 +69,25 @@ export const CitationsView = ({
   const [selectedKeyword, setSelectedKeyword] = useState<string | null>(null);
   const [selectedCitation, setSelectedCitation] = useState<CrawledContent | null>(null);
   const [loadingCitation, setLoadingCitation] = useState(false);
-  const [sortBy, setSortBy] = useState<'citations' | 'keywords'>('citations');
+  const [sortBy, setSortBy] = useState<SortConfig>({
+    column: 'citations',
+    direction: 'desc' 
+  });
+
+  const handleSort = (column: SortColumn) => {
+    setSortBy(prev => {
+      if (prev.column === column) {
+        return {
+          column,
+          direction: prev.direction === 'desc' ? 'asc' : 'desc' 
+        };
+      }
+      return {
+        column,
+        direction: 'desc' 
+      };
+    });
+  };
 
   // Filter and sort citations
   const filteredCitations = useMemo(() => 
@@ -141,10 +162,11 @@ export const CitationsView = ({
       Domain: getDomain(citation.url),
       Keywords: citation.keyword_count ?? 0,
       'Citation Count': citation.citation_count,
+      'Keyword List': (citation.keywords ?? []).join(', '),
     }));
     await exportToExcel({
       data: excelData,
-      columns: [{ wch: 8 }, { wch: 80 }, { wch: 30 }, { wch: 10 }, { wch: 15 }],
+      columns: [{ wch: 8 }, { wch: 80 }, { wch: 30 }, { wch: 10 }, { wch: 15 }, { wch: 60 }],
       sheetName: 'Citations',
       fileName: `citations-${new Date().toISOString().split('T')[0]}.xlsx`,
     });
@@ -224,7 +246,7 @@ export const CitationsView = ({
 
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
-              <CitationTableHeader sortBy={sortBy} setSortBy={setSortBy} />
+              <CitationTableHeader sort={sortBy} onSort={handleSort} />
               <tbody className="bg-white divide-y divide-gray-200">
                 {paginatedCitations.map((citation, idx) => {
                   const globalRank = startIndex + idx + 1;

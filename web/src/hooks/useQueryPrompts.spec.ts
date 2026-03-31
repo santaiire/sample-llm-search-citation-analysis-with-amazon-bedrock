@@ -28,12 +28,20 @@ const SAMPLE_PROMPT = {
   updated_at: '2026-01-01T00:00:00Z',
 };
 
+class TestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TestError';
+  }
+}
+
 function mockResponse(body: unknown, status = 200) {
-  return Promise.resolve({
+  const response = {
     ok: status >= 200 && status < 300,
     status,
     json: () => Promise.resolve(body),
-  } as Response);
+  } satisfies Partial<Response>;
+  return Promise.resolve(response as Response);
 }
 
 describe('useQueryPrompts', () => {
@@ -55,7 +63,7 @@ describe('useQueryPrompts', () => {
   });
 
   it('handles fetch error gracefully', async () => {
-    mockFetch.mockRejectedValue(new Error('Network error'));
+    mockFetch.mockRejectedValue(new TestError('Network error'));
 
     const { result } = renderHook(() => useQueryPrompts());
 

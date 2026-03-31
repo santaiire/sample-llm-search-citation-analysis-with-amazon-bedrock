@@ -42,6 +42,22 @@ export function parseApiResponse<T>(data: unknown): ApiResponse<T> {
   return { items: [] };
 }
 
+export type SortColumn = 'citations' | 'keywords' | 'domain';
+export type SortDirection = 'asc' | 'desc';
+
+export interface SortConfig {
+  column: SortColumn;
+  direction: SortDirection;
+}
+
+function getDomain(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
+
 /**
  * Filter and sort citations based on search criteria.
  */
@@ -49,7 +65,7 @@ export function filterAndSortCitations(
   citations: TopUrl[],
   searchQuery: string,
   minCitations: number | '',
-  sortBy: 'citations' | 'keywords'
+  sort: SortConfig
 ): TopUrl[] {
   const filtered = citations.filter((citation) => {
     const matchesSearch = searchQuery === '' || 
@@ -59,11 +75,16 @@ export function filterAndSortCitations(
     return matchesSearch && matchesMin;
   });
 
+  const dir = sort.direction === 'asc' ? 1 : -1;
+
   return [...filtered].sort((a, b) => {
-    if (sortBy === 'keywords') {
-      return (b.keyword_count ?? 0) - (a.keyword_count ?? 0);
+    if (sort.column === 'keywords') {
+      return ((a.keyword_count ?? 0) - (b.keyword_count ?? 0)) * dir;
     }
-    return b.citation_count - a.citation_count;
+    if (sort.column === 'domain') {
+      return getDomain(a.url).localeCompare(getDomain(b.url)) * dir;
+    }
+    return (a.citation_count - b.citation_count) * dir;
   });
 }
 

@@ -55,7 +55,10 @@ export const SearchesView = ({
       const name = s.query_prompt_name ?? 'Default';
       if (!seen.has(id)) seen.set(id, name);
     }
-    return Array.from(seen.entries()).map(([id, name]) => ({ id, name }));
+    return Array.from(seen.entries()).map(([id, name]) => ({
+      id,
+      name 
+    }));
   }, [searches]);
 
   const keywordGroups = useMemo(

@@ -55,7 +55,6 @@ def get_secret(secret_name: str) -> Optional[str]:
     """Retrieve secret from Secrets Manager with caching."""
     current_time = time.time()
     full_name = f"{SECRETS_PREFIX}{secret_name}"
-    provider_label = secret_name.replace('-key', '').title()
     
     # Check cache
     if full_name in _secrets_cache:
@@ -76,7 +75,7 @@ def get_secret(secret_name: str) -> Optional[str]:
         _secrets_cache_time[full_name] = current_time
         return api_key
     except Exception as e:
-        logger.warning(f"No secret found for {provider_label}: {e}")
+        logger.warning("Secret lookup failed: %s", type(e).__name__)
         return None
 
 
@@ -152,7 +151,7 @@ class GeminiClient:
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.base_url = "https://generativelanguage.googleapis.com/v1beta"
-        self.model = "gemini-2.5-flash"
+        self.model = "gemini-3-flash-preview"
     
     def search(self, query: str) -> Dict[str, Any]:
         """Execute search with Google Search grounding."""

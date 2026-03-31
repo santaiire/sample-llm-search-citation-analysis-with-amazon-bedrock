@@ -144,8 +144,6 @@ def store_raw_response_to_s3(
 def get_secret(secret_name: str) -> Optional[str]:
     """Retrieve a secret from AWS Secrets Manager with TTL-based caching."""
     current_time = time.time()
-    # Derive provider label from secret path (e.g. "citation-analysis/openai-key" -> "OpenAI")
-    provider_label = secret_name.rsplit('/', 1)[-1].replace('-key', '').title()
     
     # Check if cached and not expired
     if secret_name in _secrets_cache:
@@ -153,7 +151,8 @@ def get_secret(secret_name: str) -> Optional[str]:
         if current_time - cache_time < SECRETS_CACHE_TTL:
             return _secrets_cache[secret_name]
         else:
-            logger.info(f"Cache expired for {provider_label}, refreshing")
+            # Cache expired, remove stale entries
+            logger.info("Secret cache expired, refreshing")
             del _secrets_cache[secret_name]
             del _secrets_cache_time[secret_name]
     
@@ -167,7 +166,7 @@ def get_secret(secret_name: str) -> Optional[str]:
                 _secrets_cache_time[secret_name] = current_time
                 return api_key
     except Exception as e:
-        logger.error(f"No secret found for {provider_label}: {str(e)}")
+        logger.error("Error retrieving secret: %s", type(e).__name__)
     
     return None
 
@@ -190,7 +189,7 @@ def is_provider_enabled(provider_id: str) -> bool:
 DEFAULT_PROVIDER_MODELS = {
     Provider.OPENAI: 'gpt-5-mini',
     Provider.PERPLEXITY: 'sonar',
-    Provider.GEMINI: 'gemini-2.5-flash',
+    Provider.GEMINI: 'gemini-3-flash-preview',
     Provider.CLAUDE: 'claude-sonnet-4-5',
 }
 
@@ -429,7 +428,7 @@ def query_gemini(keyword: str, api_key: str, query_template: Optional[str] = Non
             "status": "success",
             "raw_response": raw_response,
             "metadata": {
-                "model": "gemini-2.5-flash",
+                "model": "gemini-3-flash-preview",
                 "latency_ms": latency_ms,
                 "usage": raw_response.get('usageMetadata', {})
             }
@@ -443,7 +442,7 @@ def query_gemini(keyword: str, api_key: str, query_template: Optional[str] = Non
             "status": "error",
             "error": str(e),
             "raw_response": None,
-            "metadata": {"model": "gemini-2.5-flash", "latency_ms": int((time.time() - start_time) * 1000)}
+            "metadata": {"model": "gemini-3-flash-preview", "latency_ms": int((time.time() - start_time) * 1000)}
         }
 
 
@@ -672,8 +671,12 @@ def store_search_results(keyword: str, timestamp: str, results: List[Dict[str, A
         # Load extraction config
         extraction_config = get_extraction_config()
         brand_extraction_enabled = extraction_config.get("brand_extraction", {}).get("enabled", True)
-        # Pass None to let brand_extractor load config from DynamoDB (which has the actual tracked brands)
+        # Load brand config once upfront and reuse for all providers (avoids repeated DynamoDB reads)
         brand_config = None
+        if brand_extraction_enabled:
+            from shared.utils import get_brand_config as _get_brand_config
+            brand_config = _get_brand_config()
+            logger.info(f"Loaded brand config for extraction: industry={brand_config.get('industry') if brand_config else 'default'}")
         
         for result in results:
             provider = result.get("provider")
@@ -687,9 +690,11 @@ def store_search_results(keyword: str, timestamp: str, results: List[Dict[str, A
             brand_data = {"brands": [], "brand_count": 0}
             if brand_extraction_enabled and response_text and provider_type == "llm":
                 try:
+                    logger.info(f"Starting brand extraction for {provider} (response length: {len(response_text)} chars)")
                     brand_data = extract_brands_from_response(response_text, config=brand_config)
+                    logger.info(f"Brand extraction for {provider}: {brand_data.get('brand_count', 0)} brands found")
                 except Exception as e:
-                    logger.error(f"Brand extraction failed for {provider}: {str(e)}")
+                    logger.error(f"Brand extraction failed for {provider}: {str(e)}", exc_info=True)
             
             # Store raw response to S3
             raw_response = result.get("raw_response")
