@@ -65,6 +65,47 @@ function createApiLambdaCode(handlerFileName: string): lambda.Code {
   });
 }
 
+/**
+ * Creates a Lambda code bundle containing multiple handler files.
+ * Used for consolidated Lambda functions that route between multiple handlers.
+ * 
+ * @param handlerFileNames - Array of Python file names to include in the bundle
+ * @returns Lambda Code asset with all specified files
+ */
+function createConsolidatedApiLambdaCode(handlerFileNames: string[]): lambda.Code {
+  const apiPath = path.join(__dirname, '../lambda/api');
+  const cpCommands = handlerFileNames.map(f => `cp /asset-input/${f} /asset-output/`).join(' && ');
+  
+  return lambda.Code.fromAsset(apiPath, {
+    bundling: {
+      image: lambda.Runtime.PYTHON_3_12.bundlingImage,
+      command: [
+        'bash', '-c',
+        `mkdir -p /asset-output && ${cpCommands} && ` +
+        `if [ -f /asset-input/decimal_utils.py ]; then cp /asset-input/decimal_utils.py /asset-output/; fi`
+      ],
+      local: {
+        tryBundle(outputDir: string): boolean {
+          try {
+            for (const fileName of handlerFileNames) {
+              const src = path.join(apiPath, fileName);
+              const dest = path.join(outputDir, fileName);
+              fs.copyFileSync(src, dest);
+            }
+            const utilsSrc = path.join(apiPath, 'decimal_utils.py');
+            if (fs.existsSync(utilsSrc)) {
+              fs.copyFileSync(utilsSrc, path.join(outputDir, 'decimal_utils.py'));
+            }
+            return true;
+          } catch {
+            return false;
+          }
+        },
+      },
+    },
+  });
+}
+
 class WebBuildRequiredError extends Error {
   constructor() {
     super('Web dashboard not built. Run "./scripts/deploy.sh" for full deployment, or "cd web && npm install && npm run build" before "cdk deploy".');
@@ -75,6 +116,9 @@ class WebBuildRequiredError extends Error {
 export class CitationAnalysisStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
+
+    // Dev mode: `cdk deploy --context dev=true` adds http://localhost:5173 as allowed CORS origin
+    const devMode = this.node.tryGetContext('dev') === 'true';
 
     // DynamoDB Table: SearchResults
     // Stores raw search results from each AI provider
@@ -346,7 +390,8 @@ export class CitationAnalysisStack extends cdk.Stack {
     );
 
     // Nova Act API Key Secret (for intelligent browser navigation with verification handling)
-    const novaActSecret = secretsmanager.Secret.fromSecretNameV2(
+    // Note: Not currently used by crawler code - kept for future use
+    secretsmanager.Secret.fromSecretNameV2(
       this,
       'NovaActSecret',
       'citation-analysis/nova-act-key'
@@ -634,7 +679,7 @@ export class CitationAnalysisStack extends cdk.Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/search')),
       role: searchLambdaRole,
       layers: [sharedLayer],
-      timeout: cdk.Duration.seconds(180), // Increased to 3 minutes to accommodate retries
+      timeout: cdk.Duration.seconds(900), // 15 min max — invoked by Step Functions, not API Gateway
       memorySize: 512,
       description: 'Query all AI providers with web search',
       logGroup: searchLogGroup,
@@ -1060,74 +1105,73 @@ export class CitationAnalysisStack extends cdk.Stack {
       description: 'API: Health check endpoint for monitoring',
     });
     
-    const getStatsFunction = new lambda.Function(this, 'GetStatsFunction', {
-      functionName: 'CitationAnalysis-API-GetStats',
+
+    // Consolidated Stats & Insights Lambda
+    // Replaces 6 individual Lambdas: get-stats, get-visibility-metrics, get-prompt-insights,
+    // get-citation-gaps, get-recommendations, get-historical-trends
+    // Routes requests based on API Gateway resource path
+    const statsInsightsFunction = new lambda.Function(this, 'StatsInsightsFunction', {
+      functionName: 'CitationAnalysis-API-StatsInsights',
       runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'get-stats.handler',
-      code: createApiLambdaCode('get-stats.py'),
+      handler: 'stats-insights.handler',
+      code: createConsolidatedApiLambdaCode([
+        'stats-insights.py',
+        'get-stats.py',
+        'get-visibility-metrics.py',
+        'get-prompt-insights.py',
+        'get-citation-gaps.py',
+        'get-recommendations.py',
+        'get-historical-trends.py',
+      ]),
       layers: [sharedLayer],
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'API: Get dashboard statistics',
+      timeout: cdk.Duration.seconds(60),
+      memorySize: 512,
+      description: 'API: Consolidated stats, visibility, insights, gaps, recommendations, and trends',
       environment: {
+        // get-stats env vars
         SEARCH_RESULTS_TABLE: searchResultsTable.tableName,
         CITATIONS_TABLE: citationsTable.tableName,
         CRAWLED_CONTENT_TABLE: crawledContentTable.tableName,
         KEYWORDS_TABLE: keywordsTable.tableName,
+        // visibility/insights env vars
+        DYNAMODB_TABLE_SEARCH_RESULTS: searchResultsTable.tableName,
+        DYNAMODB_TABLE_CITATIONS: citationsTable.tableName,
+        DYNAMODB_TABLE_CRAWLED_CONTENT: crawledContentTable.tableName,
+        DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName,
+        DYNAMODB_TABLE_KEYWORDS: keywordsTable.tableName,
+        PROVIDER_CONFIG_TABLE: providerConfigTable.tableName,
       },
     });
 
-    const getCitationsFunction = new lambda.Function(this, 'GetCitationsFunction', {
-      functionName: 'CitationAnalysis-API-GetCitations',
+    // Consolidated Citations & Content Lambda
+    // Replaces 5 individual Lambdas: get-citations, get-url-breakdown, get-searches,
+    // get-crawled-content, browse-raw-responses
+    const citationsContentFunction = new lambda.Function(this, 'CitationsContentFunction', {
+      functionName: 'CitationAnalysis-API-CitationsContent',
       runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'get-citations.handler',
-      code: createApiLambdaCode('get-citations.py'),
+      handler: 'citations-content.handler',
+      code: createConsolidatedApiLambdaCode([
+        'citations-content.py',
+        'get-citations.py',
+        'get-url-breakdown.py',
+        'get-searches.py',
+        'get-crawled-content.py',
+        'browse-raw-responses.py',
+      ]),
       layers: [sharedLayer],
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
-      description: 'API: Get citation statistics',
+      description: 'API: Consolidated citations, URL breakdown, searches, crawled content, and raw responses',
       environment: {
         CITATIONS_TABLE: citationsTable.tableName,
         SEARCH_RESULTS_TABLE: searchResultsTable.tableName,
         DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName,
+        CRAWLED_CONTENT_TABLE: crawledContentTable.tableName,
+        RAW_RESPONSES_BUCKET: rawResponsesBucket.bucketName,
+        SCREENSHOTS_BUCKET: screenshotsBucket.bucketName,
       },
     });
 
-    const getUrlBreakdownFunction = new lambda.Function(this, 'GetUrlBreakdownFunction', {
-      functionName: 'CitationAnalysis-API-GetUrlBreakdown',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'get-url-breakdown.handler',
-      code: createApiLambdaCode('get-url-breakdown.py'),
-      layers: [sharedLayer],
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'API: Get keyword/provider breakdown for a URL',
-      environment: {SEARCH_RESULTS_TABLE: searchResultsTable.tableName,},
-    });
-
-    const getSearchesFunction = new lambda.Function(this, 'GetSearchesFunction', {
-      functionName: 'CitationAnalysis-API-GetSearches',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'get-searches.handler',
-      code: createApiLambdaCode('get-searches.py'),
-      layers: [sharedLayer],
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'API: Get search results',
-      environment: {SEARCH_RESULTS_TABLE: searchResultsTable.tableName,},
-    });
-
-    const getKeywordsFunction = new lambda.Function(this, 'GetKeywordsFunction', {
-      functionName: 'CitationAnalysis-API-GetKeywords',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'get-keywords.handler',
-      code: createApiLambdaCode('get-keywords.py'),
-      layers: [sharedLayer],
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'API: Get all keywords',
-      environment: {KEYWORDS_TABLE: keywordsTable.tableName,},
-    });
 
     const getBrandMentionsFunction = new lambda.Function(this, 'GetBrandMentionsFunction', {
       functionName: 'CitationAnalysis-API-GetBrandMentions',
@@ -1156,51 +1200,67 @@ export class CitationAnalysisStack extends cdk.Stack {
       environment: {DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName,},
     });
 
-    const getCrawledContentFunction = new lambda.Function(this, 'GetCrawledContentFunction', {
-      functionName: 'CitationAnalysis-API-GetCrawledContent',
+    // Consolidated Keyword Management Lambda (get-keywords + manage-keywords + keyword-research)
+    const keywordMgmtFunction = new lambda.Function(this, 'KeywordMgmtFunction', {
+      functionName: 'CitationAnalysis-API-KeywordMgmt',
       runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'get-crawled-content.handler',
-      code: createApiLambdaCode('get-crawled-content.py'),
+      handler: 'keyword-mgmt.handler',
+      code: createConsolidatedApiLambdaCode([
+        'keyword-mgmt.py',
+        'get-keywords.py',
+        'manage-keywords.py',
+        'keyword-research.py',
+      ]),
       layers: [sharedLayer],
-      timeout: cdk.Duration.seconds(30),
+      timeout: cdk.Duration.seconds(120),
       memorySize: 256,
-      description: 'API: Get crawled content with screenshots and SEO analysis',
-      environment: {CRAWLED_CONTENT_TABLE: crawledContentTable.tableName,},
+      description: 'API: Consolidated keyword get/create/update/delete and keyword research',
+      environment: {
+        KEYWORDS_TABLE: keywordsTable.tableName,
+        KEYWORD_RESEARCH_TABLE: keywordResearchTable.tableName,
+        SECRETS_PREFIX: 'citation-analysis/',
+      },
     });
 
-    const manageKeywordsFunction = new lambda.Function(this, 'ManageKeywordsFunction', {
-      functionName: 'CitationAnalysis-API-ManageKeywords',
+    // Consolidated Config Management Lambda (query-prompts + schedules + providers)
+    const configMgmtFunction = new lambda.Function(this, 'ConfigMgmtFunction', {
+      functionName: 'CitationAnalysis-API-ConfigMgmt',
       runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'manage-keywords.handler',
-      code: createApiLambdaCode('manage-keywords.py'),
+      handler: 'config-mgmt.handler',
+      code: createConsolidatedApiLambdaCode([
+        'config-mgmt.py',
+        'manage-query-prompts.py',
+        'manage-schedule.py',
+        'manage-providers.py',
+      ]),
       layers: [sharedLayer],
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
-      description: 'API: Create, update, delete keywords',
-      environment: {KEYWORDS_TABLE: keywordsTable.tableName,},
+      description: 'API: Consolidated query prompts, schedules, and provider config',
+      environment: {
+        QUERY_PROMPTS_TABLE: queryPromptsTable.tableName,
+        STATE_MACHINE_ARN: stateMachine.stateMachineArn,
+        SCHEDULE_ROLE_ARN: schedulerRole.roleArn,
+        PROVIDER_CONFIG_TABLE: providerConfigTable.tableName,
+        SECRETS_PREFIX: 'citation-analysis/',
+      },
     });
 
-    const manageQueryPromptsFunction = new lambda.Function(this, 'ManageQueryPromptsFunction', {
-      functionName: 'CitationAnalysis-API-ManageQueryPrompts',
+    // Consolidated Execution Management Lambda (trigger-analysis + trigger-keyword-analysis + get-execution-status)
+    const executionMgmtFunction = new lambda.Function(this, 'ExecutionMgmtFunction', {
+      functionName: 'CitationAnalysis-API-ExecutionMgmt',
       runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'manage-query-prompts.handler',
-      code: createApiLambdaCode('manage-query-prompts.py'),
+      handler: 'execution-mgmt.handler',
+      code: createConsolidatedApiLambdaCode([
+        'execution-mgmt.py',
+        'trigger-analysis.py',
+        'trigger-keyword-analysis.py',
+        'get-execution-status.py',
+      ]),
       layers: [sharedLayer],
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
-      description: 'API: CRUD operations for query prompt templates',
-      environment: {QUERY_PROMPTS_TABLE: queryPromptsTable.tableName,},
-    });
-
-    const triggerAnalysisFunction = new lambda.Function(this, 'TriggerAnalysisFunction', {
-      functionName: 'CitationAnalysis-API-TriggerAnalysis',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'trigger-analysis.handler',
-      code: createApiLambdaCode('trigger-analysis.py'),
-      layers: [sharedLayer],
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'API: Trigger Step Functions execution',
+      description: 'API: Consolidated trigger analysis and execution status',
       environment: {
         STATE_MACHINE_ARN: stateMachine.stateMachineArn,
         KEYWORDS_TABLE: keywordsTable.tableName,
@@ -1208,108 +1268,99 @@ export class CitationAnalysisStack extends cdk.Stack {
       },
     });
 
-    const triggerKeywordAnalysisFunction = new lambda.Function(this, 'TriggerKeywordAnalysisFunction', {
-      functionName: 'CitationAnalysis-API-TriggerKeywordAnalysis',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'trigger-keyword-analysis.handler',
-      code: createApiLambdaCode('trigger-keyword-analysis.py'),
-      layers: [sharedLayer],
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'API: Trigger Step Functions execution for specific keywords',
-      environment: {STATE_MACHINE_ARN: stateMachine.stateMachineArn, QUERY_PROMPTS_TABLE: queryPromptsTable.tableName,},
-    });
+    // Grant consolidated stats-insights function access to all required tables
+    searchResultsTable.grantReadData(statsInsightsFunction);
+    citationsTable.grantReadData(statsInsightsFunction);
+    crawledContentTable.grantReadData(statsInsightsFunction);
+    keywordsTable.grantReadData(statsInsightsFunction);
+    brandConfigTable.grantReadData(statsInsightsFunction);
+    providerConfigTable.grantReadData(statsInsightsFunction);
+    // Grant Bedrock access for LLM-enhanced recommendations (get-recommendations.py)
+    statsInsightsFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock:InvokeModel'],
+      resources: [
+        `arn:aws:bedrock:*:${this.account}:inference-profile/global.anthropic.claude-*`,
+        `arn:aws:bedrock:*::foundation-model/anthropic.claude-*`,
+        `arn:aws:bedrock:::foundation-model/anthropic.claude-*`,
+      ],
+    }));
+    // Grant consolidated citations-content function access to all required tables and buckets
+    citationsTable.grantReadData(citationsContentFunction);
+    searchResultsTable.grantReadData(citationsContentFunction);
+    brandConfigTable.grantReadData(citationsContentFunction);
+    crawledContentTable.grantReadData(citationsContentFunction);
+    screenshotsBucket.grantRead(citationsContentFunction);
+    rawResponsesBucket.grantRead(citationsContentFunction);
 
-    // Grant trigger-keyword-analysis read access to query prompts
-    queryPromptsTable.grantReadData(triggerKeywordAnalysisFunction);
-
-    const getExecutionStatusFunction = new lambda.Function(this, 'GetExecutionStatusFunction', {
-      functionName: 'CitationAnalysis-API-GetExecutionStatus',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'get-execution-status.handler',
-      code: createApiLambdaCode('get-execution-status.py'),
-      layers: [sharedLayer],
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'API: Get Step Functions execution status (v2)',
-    });
-
-    const manageScheduleFunction = new lambda.Function(this, 'ManageScheduleFunction', {
-      functionName: 'CitationAnalysis-API-ManageSchedule',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'manage-schedule.handler',
-      code: createApiLambdaCode('manage-schedule.py'),
-      layers: [sharedLayer],
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'API: Manage EventBridge schedules',
-      environment: {
-        STATE_MACHINE_ARN: stateMachine.stateMachineArn,
-        SCHEDULE_ROLE_ARN: schedulerRole.roleArn,
-      },
-    });
-
-    const browseRawResponsesFunction = new lambda.Function(this, 'BrowseRawResponsesFunction', {
-      functionName: 'CitationAnalysis-API-BrowseRawResponses',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'browse-raw-responses.handler',
-      code: createApiLambdaCode('browse-raw-responses.py'),
-      layers: [sharedLayer],
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'API: Browse raw API responses and screenshots in S3',
-      environment: {
-        RAW_RESPONSES_BUCKET: rawResponsesBucket.bucketName,
-        SCREENSHOTS_BUCKET: screenshotsBucket.bucketName,
-      },
-    });
-
-    // Grant browse function read access to raw responses and screenshots buckets
-    rawResponsesBucket.grantRead(browseRawResponsesFunction);
-    screenshotsBucket.grantRead(browseRawResponsesFunction);
-
-    // Keyword Research Lambda Function
-    const keywordResearchFunction = new lambda.Function(this, 'KeywordResearchFunction', {
-      functionName: 'CitationAnalysis-API-KeywordResearch',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'keyword-research.handler',
-      code: createApiLambdaCode('keyword-research.py'),
-      layers: [sharedLayer],  // Needs requests library
-      timeout: cdk.Duration.seconds(120),
-      memorySize: 256,
-      description: 'API: Keyword expansion and competitor analysis',
-      environment: {
-        KEYWORD_RESEARCH_TABLE: keywordResearchTable.tableName,
-        SECRETS_PREFIX: 'citation-analysis/',
-      },
-    });
-
-    // Grant keyword research function access to DynamoDB and Secrets
-    keywordResearchTable.grantReadWriteData(keywordResearchFunction);
-    perplexitySecret.grantRead(keywordResearchFunction);
-    openaiSecret.grantRead(keywordResearchFunction);  // Fallback provider
-    geminiSecret.grantRead(keywordResearchFunction);  // Fallback provider
-    keywordResearchFunction.addToRolePolicy(new iam.PolicyStatement({
+    // Grant keyword management function access
+    keywordsTable.grantReadWriteData(keywordMgmtFunction);
+    keywordResearchTable.grantReadWriteData(keywordMgmtFunction);
+    perplexitySecret.grantRead(keywordMgmtFunction);
+    openaiSecret.grantRead(keywordMgmtFunction);
+    geminiSecret.grantRead(keywordMgmtFunction);
+    keywordMgmtFunction.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ['lambda:InvokeFunction'],
-      resources: [`arn:aws:lambda:${this.region}:${this.account}:function:CitationAnalysis-API-KeywordResearch`],
-    }));  // Self-invoke for async keyword research
+      resources: [`arn:aws:lambda:${this.region}:${this.account}:function:CitationAnalysis-API-KeywordMgmt`],
+    }));
 
-    // Grant API Lambda functions read access to DynamoDB tables
-    searchResultsTable.grantReadData(getStatsFunction);
-    citationsTable.grantReadData(getStatsFunction);
-    crawledContentTable.grantReadData(getStatsFunction);
-    keywordsTable.grantReadData(getStatsFunction);
-    citationsTable.grantReadData(getCitationsFunction);
-    searchResultsTable.grantReadData(getCitationsFunction);
-    brandConfigTable.grantReadData(getCitationsFunction);
-    searchResultsTable.grantReadData(getUrlBreakdownFunction);
-    searchResultsTable.grantReadData(getSearchesFunction);
-    keywordsTable.grantReadData(getKeywordsFunction);
-    keywordsTable.grantReadWriteData(manageKeywordsFunction);
-    queryPromptsTable.grantReadWriteData(manageQueryPromptsFunction);
-    keywordsTable.grantReadData(triggerAnalysisFunction);
-    queryPromptsTable.grantReadData(triggerAnalysisFunction);
+    // Grant config management function access
+    queryPromptsTable.grantReadWriteData(configMgmtFunction);
+    providerConfigTable.grantReadWriteData(configMgmtFunction);
+    openaiSecret.grantRead(configMgmtFunction);
+    openaiSecret.grantWrite(configMgmtFunction);
+    perplexitySecret.grantRead(configMgmtFunction);
+    perplexitySecret.grantWrite(configMgmtFunction);
+    geminiSecret.grantRead(configMgmtFunction);
+    geminiSecret.grantWrite(configMgmtFunction);
+    claudeSecret.grantRead(configMgmtFunction);
+    claudeSecret.grantWrite(configMgmtFunction);
+    configMgmtFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['secretsmanager:CreateSecret', 'secretsmanager:PutSecretValue', 'secretsmanager:GetSecretValue'],
+      resources: [`arn:aws:secretsmanager:${this.region}:${this.account}:secret:citation-analysis/*`],
+    }));
+    configMgmtFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['scheduler:CreateSchedule', 'scheduler:GetSchedule', 'scheduler:DeleteSchedule', 'scheduler:UpdateSchedule'],
+      resources: [`arn:aws:scheduler:${this.region}:${this.account}:schedule/default/CitationAnalysis-*`],
+    }));
+    configMgmtFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['scheduler:ListSchedules'],
+      resources: ['*'],
+    }));
+    configMgmtFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['scheduler:CreateScheduleGroup', 'scheduler:GetScheduleGroup'],
+      resources: [`arn:aws:scheduler:${this.region}:${this.account}:schedule-group/default`],
+    }));
+    configMgmtFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['iam:PassRole'],
+      resources: [schedulerRole.roleArn],
+    }));
+
+    // Grant execution management function access
+    keywordsTable.grantReadData(executionMgmtFunction);
+    queryPromptsTable.grantReadData(executionMgmtFunction);
+    executionMgmtFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['states:StartExecution'],
+      resources: [stateMachine.stateMachineArn],
+    }));
+    executionMgmtFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['states:DescribeExecution', 'states:GetExecutionHistory'],
+      resources: [`arn:aws:states:${this.region}:${this.account}:execution:CitationAnalysis-Workflow:*`],
+    }));
+    executionMgmtFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['states:ListExecutions'],
+      resources: [stateMachine.stateMachineArn],
+    }));
+
     searchResultsTable.grantReadData(getBrandMentionsFunction);
     brandConfigTable.grantReadData(getBrandMentionsFunction);
     brandConfigTable.grantReadWriteData(manageBrandConfigFunction);
@@ -1330,69 +1381,7 @@ export class CitationAnalysisStack extends cdk.Stack {
       ],
     }));
     
-    crawledContentTable.grantReadData(getCrawledContentFunction);
-    screenshotsBucket.grantRead(getCrawledContentFunction);
 
-    // Grant permissions for Step Functions and EventBridge Scheduler management
-    triggerAnalysisFunction.addToRolePolicy(new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: ['states:StartExecution'],
-      resources: [stateMachine.stateMachineArn],
-    }));
-
-    triggerKeywordAnalysisFunction.addToRolePolicy(new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: ['states:StartExecution'],
-      resources: [stateMachine.stateMachineArn],
-    }));
-
-    // Scoped to specific state machine and its executions (security best practice)
-    getExecutionStatusFunction.addToRolePolicy(new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'states:DescribeExecution',
-        'states:GetExecutionHistory',
-      ],
-      resources: [
-        `arn:aws:states:${this.region}:${this.account}:execution:CitationAnalysis-Workflow:*`
-      ],
-    }));
-    getExecutionStatusFunction.addToRolePolicy(new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: ['states:ListExecutions'],
-      resources: [stateMachine.stateMachineArn],
-    }));
-
-    // Scoped to CitationAnalysis schedules only (security best practice)
-    manageScheduleFunction.addToRolePolicy(new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'scheduler:CreateSchedule',
-        'scheduler:GetSchedule',
-        'scheduler:DeleteSchedule',
-        'scheduler:UpdateSchedule',
-      ],
-      resources: [`arn:aws:scheduler:${this.region}:${this.account}:schedule/default/CitationAnalysis-*`],
-    }));
-    manageScheduleFunction.addToRolePolicy(new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: ['scheduler:ListSchedules'],
-      resources: ['*'], // ListSchedules requires wildcard but is read-only
-    }));
-    manageScheduleFunction.addToRolePolicy(new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'scheduler:CreateScheduleGroup',
-        'scheduler:GetScheduleGroup',
-      ],
-      resources: [`arn:aws:scheduler:${this.region}:${this.account}:schedule-group/default`],
-    }));
-
-    manageScheduleFunction.addToRolePolicy(new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: ['iam:PassRole'],
-      resources: [schedulerRole.roleArn],
-    }));
 
     // Grant scheduler role permission to start executions
     stateMachine.grantStartExecution(schedulerRole);
@@ -1551,7 +1540,7 @@ export class CitationAnalysisStack extends cdk.Stack {
     };
     
     const statsResource = apiResource.addResource('stats');
-    statsResource.addMethod('GET', new apigateway.LambdaIntegration(getStatsFunction, integrationOptions), methodOptions);
+    statsResource.addMethod('GET', new apigateway.LambdaIntegration(statsInsightsFunction, integrationOptions), methodOptions);
 
     // Health check endpoint - No authentication required
     // NOSONAR: Health check must be public for load balancer/monitoring probes
@@ -1561,30 +1550,30 @@ export class CitationAnalysisStack extends cdk.Stack {
     });
 
     const citationsResource = apiResource.addResource('citations');
-    citationsResource.addMethod('GET', new apigateway.LambdaIntegration(getCitationsFunction, integrationOptions), methodOptions);
+    citationsResource.addMethod('GET', new apigateway.LambdaIntegration(citationsContentFunction, integrationOptions), methodOptions);
 
     const urlBreakdownResource = apiResource.addResource('url-breakdown');
-    urlBreakdownResource.addMethod('GET', new apigateway.LambdaIntegration(getUrlBreakdownFunction, integrationOptions), methodOptions);
+    urlBreakdownResource.addMethod('GET', new apigateway.LambdaIntegration(citationsContentFunction, integrationOptions), methodOptions);
 
     const searchesResource = apiResource.addResource('searches');
-    searchesResource.addMethod('GET', new apigateway.LambdaIntegration(getSearchesFunction, integrationOptions), methodOptions);
+    searchesResource.addMethod('GET', new apigateway.LambdaIntegration(citationsContentFunction, integrationOptions), methodOptions);
 
     const keywordsResource = apiResource.addResource('keywords');
-    keywordsResource.addMethod('GET', new apigateway.LambdaIntegration(getKeywordsFunction, integrationOptions), methodOptions);
-    keywordsResource.addMethod('POST', new apigateway.LambdaIntegration(manageKeywordsFunction, integrationOptions), methodOptions);
+    keywordsResource.addMethod('GET', new apigateway.LambdaIntegration(keywordMgmtFunction, integrationOptions), methodOptions);
+    keywordsResource.addMethod('POST', new apigateway.LambdaIntegration(keywordMgmtFunction, integrationOptions), methodOptions);
     
     const keywordIdResource = keywordsResource.addResource('{id}');
-    keywordIdResource.addMethod('PUT', new apigateway.LambdaIntegration(manageKeywordsFunction, integrationOptions), methodOptions);
-    keywordIdResource.addMethod('DELETE', new apigateway.LambdaIntegration(manageKeywordsFunction, integrationOptions), methodOptions);
+    keywordIdResource.addMethod('PUT', new apigateway.LambdaIntegration(keywordMgmtFunction, integrationOptions), methodOptions);
+    keywordIdResource.addMethod('DELETE', new apigateway.LambdaIntegration(keywordMgmtFunction, integrationOptions), methodOptions);
 
     const queryPromptsResource = apiResource.addResource('query-prompts');
-    queryPromptsResource.addMethod('GET', new apigateway.LambdaIntegration(manageQueryPromptsFunction, integrationOptions), methodOptions);
-    queryPromptsResource.addMethod('POST', new apigateway.LambdaIntegration(manageQueryPromptsFunction, integrationOptions), methodOptions);
+    queryPromptsResource.addMethod('GET', new apigateway.LambdaIntegration(configMgmtFunction, integrationOptions), methodOptions);
+    queryPromptsResource.addMethod('POST', new apigateway.LambdaIntegration(configMgmtFunction, integrationOptions), methodOptions);
 
     const queryPromptIdResource = queryPromptsResource.addResource('{id}');
-    queryPromptIdResource.addMethod('PUT', new apigateway.LambdaIntegration(manageQueryPromptsFunction, integrationOptions), methodOptions);
-    queryPromptIdResource.addMethod('DELETE', new apigateway.LambdaIntegration(manageQueryPromptsFunction, integrationOptions), methodOptions);
-    queryPromptIdResource.addMethod('PATCH', new apigateway.LambdaIntegration(manageQueryPromptsFunction, integrationOptions), methodOptions);
+    queryPromptIdResource.addMethod('PUT', new apigateway.LambdaIntegration(configMgmtFunction, integrationOptions), methodOptions);
+    queryPromptIdResource.addMethod('DELETE', new apigateway.LambdaIntegration(configMgmtFunction, integrationOptions), methodOptions);
+    queryPromptIdResource.addMethod('PATCH', new apigateway.LambdaIntegration(configMgmtFunction, integrationOptions), methodOptions);
 
     const brandMentionsResource = apiResource.addResource('brand-mentions');
     brandMentionsResource.addMethod('GET', new apigateway.LambdaIntegration(getBrandMentionsFunction, integrationOptions), methodOptions);
@@ -1608,196 +1597,69 @@ export class CitationAnalysisStack extends cdk.Stack {
     brandConfigFindCompetitorsResource.addMethod('POST', new apigateway.LambdaIntegration(manageBrandConfigFunction, integrationOptions), methodOptions);
 
     const crawledContentResource = apiResource.addResource('crawled-content');
-    crawledContentResource.addMethod('GET', new apigateway.LambdaIntegration(getCrawledContentFunction, integrationOptions), methodOptions);
+    crawledContentResource.addMethod('GET', new apigateway.LambdaIntegration(citationsContentFunction, integrationOptions), methodOptions);
 
     const triggerResource = apiResource.addResource('trigger-analysis');
-    triggerResource.addMethod('POST', new apigateway.LambdaIntegration(triggerAnalysisFunction, integrationOptions), methodOptions);
+    triggerResource.addMethod('POST', new apigateway.LambdaIntegration(executionMgmtFunction, integrationOptions), methodOptions);
 
     const triggerKeywordResource = apiResource.addResource('trigger-keyword-analysis');
-    triggerKeywordResource.addMethod('POST', new apigateway.LambdaIntegration(triggerKeywordAnalysisFunction, integrationOptions), methodOptions);
+    triggerKeywordResource.addMethod('POST', new apigateway.LambdaIntegration(executionMgmtFunction, integrationOptions), methodOptions);
 
     const executionsResource = apiResource.addResource('executions');
     const executionIdResource = executionsResource.addResource('{id}');
-    executionIdResource.addMethod('GET', new apigateway.LambdaIntegration(getExecutionStatusFunction, integrationOptions), methodOptions);
+    executionIdResource.addMethod('GET', new apigateway.LambdaIntegration(executionMgmtFunction, integrationOptions), methodOptions);
 
     const schedulesResource = apiResource.addResource('schedules');
-    schedulesResource.addMethod('GET', new apigateway.LambdaIntegration(manageScheduleFunction, integrationOptions), methodOptions);
-    schedulesResource.addMethod('POST', new apigateway.LambdaIntegration(manageScheduleFunction, integrationOptions), methodOptions);
+    schedulesResource.addMethod('GET', new apigateway.LambdaIntegration(configMgmtFunction, integrationOptions), methodOptions);
+    schedulesResource.addMethod('POST', new apigateway.LambdaIntegration(configMgmtFunction, integrationOptions), methodOptions);
     
     const scheduleNameResource = schedulesResource.addResource('{name}');
-    scheduleNameResource.addMethod('DELETE', new apigateway.LambdaIntegration(manageScheduleFunction, integrationOptions), methodOptions);
+    scheduleNameResource.addMethod('DELETE', new apigateway.LambdaIntegration(configMgmtFunction, integrationOptions), methodOptions);
 
     // Raw Responses Browser API
     const rawResponsesResource = apiResource.addResource('raw-responses');
     const rawResponsesBrowseResource = rawResponsesResource.addResource('browse');
-    rawResponsesBrowseResource.addMethod('GET', new apigateway.LambdaIntegration(browseRawResponsesFunction, integrationOptions), methodOptions);
+    rawResponsesBrowseResource.addMethod('GET', new apigateway.LambdaIntegration(citationsContentFunction, integrationOptions), methodOptions);
     
     const rawResponsesFileResource = rawResponsesResource.addResource('file');
-    rawResponsesFileResource.addMethod('GET', new apigateway.LambdaIntegration(browseRawResponsesFunction, integrationOptions), methodOptions);
+    rawResponsesFileResource.addMethod('GET', new apigateway.LambdaIntegration(citationsContentFunction, integrationOptions), methodOptions);
     
     const rawResponsesDownloadResource = rawResponsesResource.addResource('download');
-    rawResponsesDownloadResource.addMethod('GET', new apigateway.LambdaIntegration(browseRawResponsesFunction, integrationOptions), methodOptions);
+    rawResponsesDownloadResource.addMethod('GET', new apigateway.LambdaIntegration(citationsContentFunction, integrationOptions), methodOptions);
 
     // Keyword Research API
     const keywordResearchResource = apiResource.addResource('keyword-research');
     const keywordResearchExpandResource = keywordResearchResource.addResource('expand');
-    keywordResearchExpandResource.addMethod('POST', new apigateway.LambdaIntegration(keywordResearchFunction, integrationOptions), methodOptions);
+    keywordResearchExpandResource.addMethod('POST', new apigateway.LambdaIntegration(keywordMgmtFunction, integrationOptions), methodOptions);
     
     const keywordResearchCompetitorResource = keywordResearchResource.addResource('competitor');
-    keywordResearchCompetitorResource.addMethod('POST', new apigateway.LambdaIntegration(keywordResearchFunction, integrationOptions), methodOptions);
+    keywordResearchCompetitorResource.addMethod('POST', new apigateway.LambdaIntegration(keywordMgmtFunction, integrationOptions), methodOptions);
     
     const keywordResearchHistoryResource = keywordResearchResource.addResource('history');
-    keywordResearchHistoryResource.addMethod('GET', new apigateway.LambdaIntegration(keywordResearchFunction, integrationOptions), methodOptions);
+    keywordResearchHistoryResource.addMethod('GET', new apigateway.LambdaIntegration(keywordMgmtFunction, integrationOptions), methodOptions);
     
     const keywordResearchIdResource = keywordResearchResource.addResource('{id}');
-    keywordResearchIdResource.addMethod('DELETE', new apigateway.LambdaIntegration(keywordResearchFunction, integrationOptions), methodOptions);
+    keywordResearchIdResource.addMethod('DELETE', new apigateway.LambdaIntegration(keywordMgmtFunction, integrationOptions), methodOptions);
 
     // ========================================
-    // Visibility & Insights APIs
+    // Visibility & Insights API Routes
+    // (Handled by consolidated StatsInsightsFunction)
     // ========================================
 
-    // Visibility Metrics Lambda
-    const getVisibilityMetricsFunction = new lambda.Function(this, 'GetVisibilityMetricsFunction', {
-      functionName: 'CitationAnalysis-API-GetVisibilityMetrics',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'get-visibility-metrics.handler',
-      code: createApiLambdaCode('get-visibility-metrics.py'),
-      layers: [sharedLayer],
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'API: Get visibility scores and share of voice metrics',
-      environment: {
-        DYNAMODB_TABLE_SEARCH_RESULTS: searchResultsTable.tableName,
-        DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName,
-        PROVIDER_CONFIG_TABLE: providerConfigTable.tableName,
-      },
-    });
-    searchResultsTable.grantReadData(getVisibilityMetricsFunction);
-    brandConfigTable.grantReadData(getVisibilityMetricsFunction);
-    providerConfigTable.grantReadData(getVisibilityMetricsFunction);
-
-    // Prompt Insights Lambda
-    const getPromptInsightsFunction = new lambda.Function(this, 'GetPromptInsightsFunction', {
-      functionName: 'CitationAnalysis-API-GetPromptInsights',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'get-prompt-insights.handler',
-      code: createApiLambdaCode('get-prompt-insights.py'),
-      layers: [sharedLayer],
-      timeout: cdk.Duration.seconds(60),
-      memorySize: 256,
-      description: 'API: Get prompt intelligence and winning/losing prompts',
-      environment: {
-        DYNAMODB_TABLE_SEARCH_RESULTS: searchResultsTable.tableName,
-        DYNAMODB_TABLE_KEYWORDS: keywordsTable.tableName,
-        DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName,
-      },
-    });
-    searchResultsTable.grantReadData(getPromptInsightsFunction);
-    keywordsTable.grantReadData(getPromptInsightsFunction);
-    brandConfigTable.grantReadData(getPromptInsightsFunction);
-
-    // Citation Gaps Lambda
-    const getCitationGapsFunction = new lambda.Function(this, 'GetCitationGapsFunction', {
-      functionName: 'CitationAnalysis-API-GetCitationGaps',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'get-citation-gaps.handler',
-      code: createApiLambdaCode('get-citation-gaps.py'),
-      layers: [sharedLayer],
-      timeout: cdk.Duration.seconds(60),
-      memorySize: 256,
-      description: 'API: Get citation gap analysis',
-      environment: {
-        DYNAMODB_TABLE_SEARCH_RESULTS: searchResultsTable.tableName,
-        DYNAMODB_TABLE_CITATIONS: citationsTable.tableName,
-        DYNAMODB_TABLE_CRAWLED_CONTENT: crawledContentTable.tableName,
-        DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName,
-        DYNAMODB_TABLE_KEYWORDS: keywordsTable.tableName,
-      },
-    });
-    searchResultsTable.grantReadData(getCitationGapsFunction);
-    citationsTable.grantReadData(getCitationGapsFunction);
-    crawledContentTable.grantReadData(getCitationGapsFunction);
-    brandConfigTable.grantReadData(getCitationGapsFunction);
-    keywordsTable.grantReadData(getCitationGapsFunction);
-
-    // Recommendations Lambda
-    const getRecommendationsFunction = new lambda.Function(this, 'GetRecommendationsFunction', {
-      functionName: 'CitationAnalysis-API-GetRecommendations',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'get-recommendations.handler',
-      code: createApiLambdaCode('get-recommendations.py'),
-      layers: [sharedLayer],
-      timeout: cdk.Duration.seconds(60),
-      memorySize: 256,
-      description: 'API: Get actionable recommendations',
-      environment: {
-        DYNAMODB_TABLE_SEARCH_RESULTS: searchResultsTable.tableName,
-        DYNAMODB_TABLE_CITATIONS: citationsTable.tableName,
-        DYNAMODB_TABLE_CRAWLED_CONTENT: crawledContentTable.tableName,
-        DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName,
-        DYNAMODB_TABLE_KEYWORDS: keywordsTable.tableName,
-      },
-    });
-    searchResultsTable.grantReadData(getRecommendationsFunction);
-    citationsTable.grantReadData(getRecommendationsFunction);
-    crawledContentTable.grantReadData(getRecommendationsFunction);
-    brandConfigTable.grantReadData(getRecommendationsFunction);
-    keywordsTable.grantReadData(getRecommendationsFunction);
-    // Grant Bedrock access for LLM-enhanced recommendations
-    // Uses global.anthropic.claude-* inference profiles with Converse API
-    // Note: Converse API requires bedrock:InvokeModel permission (not bedrock:Converse)
-    // Global cross-region inference requires three ARN patterns per AWS docs
-    getRecommendationsFunction.addToRolePolicy(new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: ['bedrock:InvokeModel'],
-      resources: [
-        `arn:aws:bedrock:*:${this.account}:inference-profile/global.anthropic.claude-*`, // Regional inference profile
-        `arn:aws:bedrock:*::foundation-model/anthropic.claude-*`, // Regional foundation model
-        `arn:aws:bedrock:::foundation-model/anthropic.claude-*`, // Global foundation model (no region/account)
-      ],
-    }));
-
-    // Historical Trends Lambda
-    const getHistoricalTrendsFunction = new lambda.Function(this, 'GetHistoricalTrendsFunction', {
-      functionName: 'CitationAnalysis-API-GetHistoricalTrends',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'get-historical-trends.handler',
-      code: createApiLambdaCode('get-historical-trends.py'),
-      layers: [sharedLayer],
-      timeout: cdk.Duration.seconds(60),
-      memorySize: 256,
-      description: 'API: Get historical visibility trends',
-      environment: {
-        DYNAMODB_TABLE_SEARCH_RESULTS: searchResultsTable.tableName,
-        DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName,
-        DYNAMODB_TABLE_KEYWORDS: keywordsTable.tableName,
-        PROVIDER_CONFIG_TABLE: providerConfigTable.tableName,
-      },
-    });
-    searchResultsTable.grantReadData(getHistoricalTrendsFunction);
-    brandConfigTable.grantReadData(getHistoricalTrendsFunction);
-    keywordsTable.grantReadData(getHistoricalTrendsFunction);
-    providerConfigTable.grantReadData(getHistoricalTrendsFunction);
-
-    // Visibility Metrics API Route
     const visibilityResource = apiResource.addResource('visibility');
-    visibilityResource.addMethod('GET', new apigateway.LambdaIntegration(getVisibilityMetricsFunction, integrationOptions), methodOptions);
+    visibilityResource.addMethod('GET', new apigateway.LambdaIntegration(statsInsightsFunction, integrationOptions), methodOptions);
 
-    // Prompt Insights API Route
     const promptInsightsResource = apiResource.addResource('prompt-insights');
-    promptInsightsResource.addMethod('GET', new apigateway.LambdaIntegration(getPromptInsightsFunction, integrationOptions), methodOptions);
+    promptInsightsResource.addMethod('GET', new apigateway.LambdaIntegration(statsInsightsFunction, integrationOptions), methodOptions);
 
-    // Citation Gaps API Route
     const citationGapsResource = apiResource.addResource('citation-gaps');
-    citationGapsResource.addMethod('GET', new apigateway.LambdaIntegration(getCitationGapsFunction, integrationOptions), methodOptions);
+    citationGapsResource.addMethod('GET', new apigateway.LambdaIntegration(statsInsightsFunction, integrationOptions), methodOptions);
 
-    // Recommendations API Route
     const recommendationsResource = apiResource.addResource('recommendations');
-    recommendationsResource.addMethod('GET', new apigateway.LambdaIntegration(getRecommendationsFunction, integrationOptions), methodOptions);
+    recommendationsResource.addMethod('GET', new apigateway.LambdaIntegration(statsInsightsFunction, integrationOptions), methodOptions);
 
-    // Historical Trends API Route
     const trendsResource = apiResource.addResource('trends');
-    trendsResource.addMethod('GET', new apigateway.LambdaIntegration(getHistoricalTrendsFunction, integrationOptions), methodOptions);
+    trendsResource.addMethod('GET', new apigateway.LambdaIntegration(statsInsightsFunction, integrationOptions), methodOptions);
 
     // ========================================
     // Content Studio API
@@ -1878,51 +1740,15 @@ export class CitationAnalysisStack extends cdk.Stack {
     // Provider Configuration API
     // ========================================
 
-    // Provider Config Lambda
-    const manageProvidersFunction = new lambda.Function(this, 'ManageProvidersFunction', {
-      functionName: 'CitationAnalysis-API-ManageProviders',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'manage-providers.handler',
-      code: createApiLambdaCode('manage-providers.py'),
-      layers: [sharedLayer],
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'API: Manage AI provider configuration',
-      environment: {
-        PROVIDER_CONFIG_TABLE: providerConfigTable.tableName,
-        SECRETS_PREFIX: 'citation-analysis/',
-      },
-    });
-    providerConfigTable.grantReadWriteData(manageProvidersFunction);
-    // Grant access to read/write secrets for all providers
-    openaiSecret.grantRead(manageProvidersFunction);
-    openaiSecret.grantWrite(manageProvidersFunction);
-    perplexitySecret.grantRead(manageProvidersFunction);
-    perplexitySecret.grantWrite(manageProvidersFunction);
-    geminiSecret.grantRead(manageProvidersFunction);
-    geminiSecret.grantWrite(manageProvidersFunction);
-    claudeSecret.grantRead(manageProvidersFunction);
-    claudeSecret.grantWrite(manageProvidersFunction);
-    // Grant permission to create new secrets
-    manageProvidersFunction.addToRolePolicy(new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'secretsmanager:CreateSecret',
-        'secretsmanager:PutSecretValue',
-        'secretsmanager:GetSecretValue',
-      ],
-      resources: [`arn:aws:secretsmanager:${this.region}:${this.account}:secret:citation-analysis/*`],
-    }));
-
-    // Provider Config API Routes
+    // Provider Config API Routes (handled by configMgmtFunction)
     const providersResource = apiResource.addResource('providers');
-    providersResource.addMethod('GET', new apigateway.LambdaIntegration(manageProvidersFunction, integrationOptions), methodOptions);
+    providersResource.addMethod('GET', new apigateway.LambdaIntegration(configMgmtFunction, integrationOptions), methodOptions);
     
     const providerIdResource = providersResource.addResource('{id}');
-    providerIdResource.addMethod('PUT', new apigateway.LambdaIntegration(manageProvidersFunction, integrationOptions), methodOptions);
+    providerIdResource.addMethod('PUT', new apigateway.LambdaIntegration(configMgmtFunction, integrationOptions), methodOptions);
     
     const providerValidateResource = providerIdResource.addResource('validate');
-    providerValidateResource.addMethod('POST', new apigateway.LambdaIntegration(manageProvidersFunction, integrationOptions), methodOptions);
+    providerValidateResource.addMethod('POST', new apigateway.LambdaIntegration(configMgmtFunction, integrationOptions), methodOptions);
 
     // ========================================
     // User Management API
@@ -2242,8 +2068,9 @@ def delete_waf(waf, arn):
 
     // SECURITY: Gateway responses use the CloudFront origin instead of wildcard '*'
     // so that auth failure details (401/403) are not observable by arbitrary origins.
+    // In dev mode, use wildcard to allow localhost (Lambda-level CORS still validates per-request).
     const gatewayResponseCorsHeaders = {
-      'Access-Control-Allow-Origin': `'${cloudFrontOrigin}'`,
+      'Access-Control-Allow-Origin': devMode ? "'*'" : `'${cloudFrontOrigin}'`,
       'Access-Control-Allow-Headers': "'Content-Type,Authorization,X-Api-Key'",
       'Access-Control-Allow-Methods': "'GET,POST,PUT,DELETE,OPTIONS'",
     };
@@ -2283,20 +2110,76 @@ def delete_waf(waf, arn):
     
     // Grant all API Lambda functions read access to the CORS parameter
     const apiLambdaFunctions = [
-      getStatsFunction, getCitationsFunction, getUrlBreakdownFunction, getSearchesFunction,
-      getKeywordsFunction, manageKeywordsFunction, manageQueryPromptsFunction, getBrandMentionsFunction,
-      manageBrandConfigFunction, getCrawledContentFunction, triggerAnalysisFunction,
-      triggerKeywordAnalysisFunction, getExecutionStatusFunction, manageScheduleFunction,
-      browseRawResponsesFunction, keywordResearchFunction, getVisibilityMetricsFunction,
-      getPromptInsightsFunction, getCitationGapsFunction, getRecommendationsFunction,
-      getHistoricalTrendsFunction, contentStudioFunction, manageProvidersFunction,
-      manageUsersFunction
+      statsInsightsFunction, citationsContentFunction,
+      keywordMgmtFunction, configMgmtFunction, executionMgmtFunction,
+      getBrandMentionsFunction, manageBrandConfigFunction,
+      contentStudioFunction, manageUsersFunction
     ];
     
     for (const fn of apiLambdaFunctions) {
       corsOriginParam.grantRead(fn);
       fn.addEnvironment('CORS_ORIGIN_PARAM', corsOriginParam.parameterName);
+      if (devMode) {
+        fn.addEnvironment('ALLOW_LOCALHOST', 'true');
+      }
     }
+
+    // ========================================
+    // Optimize Lambda Permissions
+    // ========================================
+    // CDK creates 2 Lambda::Permission per API method (prod + test-invoke).
+    // For consolidated Lambdas backing many routes, replace N permissions with
+    // a single wildcard permission per function. This is safe because all routes
+    // share the same Cognito authorizer and the Lambda handles its own routing.
+    // AWS docs support wildcard source ARNs for execute-api.
+
+    const consolidatedFunctions = [
+      statsInsightsFunction, citationsContentFunction, keywordMgmtFunction,
+      configMgmtFunction, executionMgmtFunction, manageBrandConfigFunction,
+      contentStudioFunction, manageUsersFunction,
+    ];
+
+    for (const fn of consolidatedFunctions) {
+      // Add single wildcard permission for this API
+      fn.addPermission('ApiGatewayWildcard', {
+        principal: new iam.ServicePrincipal('apigateway.amazonaws.com'),
+        sourceArn: api.arnForExecuteApi('*'),
+      });
+    }
+
+    // Remove CDK auto-generated per-method Lambda::Permission resources
+    // for consolidated functions. The wildcard permission above covers all methods.
+    // We use Aspects to remove them after synthesis since they're created on the
+    // API Gateway method constructs, not on the Lambda.
+    const consolidatedLogicalPrefixes: string[] = [];
+    for (const fn of consolidatedFunctions) {
+      const cfnFn = fn.node.defaultChild as cdk.CfnResource;
+      consolidatedLogicalPrefixes.push(cfnFn.logicalId);
+    }
+
+    class RemoveDuplicatePermissions implements cdk.IAspect {
+      private readonly fnArns: Set<string>;
+      private readonly fnArnStrings: string[];
+      constructor(fns: lambda.Function[]) {
+        this.fnArns = new Set(fns.map(fn => fn.functionArn));
+        this.fnArnStrings = fns.map(fn => JSON.stringify(fn.functionArn));
+      }
+      public visit(node: Construct): void {
+        if (node instanceof lambda.CfnPermission) {
+          if (node.node.id === 'ApiGatewayWildcard') return;
+          const fnNameStr = JSON.stringify(node.functionName);
+          if (this.fnArnStrings.includes(fnNameStr)) {
+            const parent = node.node.scope;
+            if (parent) {
+              parent.node.tryRemoveChild(node.node.id);
+            }
+          }
+        }
+      }
+    }
+
+
+    cdk.Aspects.of(this).add(new RemoveDuplicatePermissions(consolidatedFunctions));
 
     // ========================================
     // Outputs

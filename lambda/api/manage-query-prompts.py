@@ -71,9 +71,10 @@ def list_prompts(event, context):
 @validate({
     'name': {'required': True, 'type': str, 'max_length': 100, 'source': 'body'},
     'template': {'required': True, 'type': str, 'max_length': 2000, 'source': 'body'},
+    'description': {'type': str, 'max_length': 1000, 'source': 'body'},
 })
-def create_prompt(event, context, body, name, template):
-    """POST /api/query-prompts - Create a new query prompt."""
+def create_prompt(event, context, body, name, template, description):
+    """POST /api/query-prompts - Create a new query prompt (persona)."""
     # Validate template contains {keyword}
     if '{keyword}' not in template:
         return validation_error(
@@ -99,6 +100,9 @@ def create_prompt(event, context, body, name, template):
         'updated_at': timestamp,
     }
 
+    if description:
+        item['description'] = description
+
     query_prompts_table.put_item(Item=item)
     return success_response(item, event, 201)
 
@@ -107,9 +111,10 @@ def create_prompt(event, context, body, name, template):
 @validate({
     'name': {'type': str, 'max_length': 100, 'source': 'body'},
     'template': {'type': str, 'max_length': 2000, 'source': 'body'},
+    'description': {'type': str, 'max_length': 1000, 'source': 'body'},
 })
-def update_prompt(event, context, prompt_id, body, name, template):
-    """PUT /api/query-prompts/{id} - Update a query prompt."""
+def update_prompt(event, context, prompt_id, body, name, template, description):
+    """PUT /api/query-prompts/{id} - Update a query prompt (persona)."""
     if not prompt_id:
         return validation_error('Prompt ID is required', event, 'id')
 
@@ -130,6 +135,9 @@ def update_prompt(event, context, prompt_id, body, name, template):
     if template is not None:
         update_expr += ', template = :t'
         expr_values[':t'] = template
+    if description is not None:
+        update_expr += ', description = :d'
+        expr_values[':d'] = description
 
     expr_names = {'#n': 'name'} if name is not None else {}
 

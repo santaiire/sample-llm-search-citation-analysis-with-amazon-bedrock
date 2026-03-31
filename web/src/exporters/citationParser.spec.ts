@@ -4,9 +4,35 @@ import {
 import {
   parseApiResponse, filterAndSortCitations 
 } from './citationParser';
+import type { SortConfig } from './citationParser';
 import {
   buildCitation, buildCitations 
 } from './citationParserFixtures';
+
+const DESC_CITATIONS = {
+  column: 'citations',
+  direction: 'desc' 
+} satisfies SortConfig;
+const DESC_KEYWORDS = {
+  column: 'keywords',
+  direction: 'desc' 
+} satisfies SortConfig;
+const ASC_CITATIONS = {
+  column: 'citations',
+  direction: 'asc' 
+} satisfies SortConfig;
+const ASC_KEYWORDS = {
+  column: 'keywords',
+  direction: 'asc' 
+} satisfies SortConfig;
+const DESC_DOMAIN = {
+  column: 'domain',
+  direction: 'desc' 
+} satisfies SortConfig;
+const ASC_DOMAIN = {
+  column: 'domain',
+  direction: 'asc' 
+} satisfies SortConfig;
 
 describe('parseApiResponse', () => {
   it('returns empty items array when input is null', () => {
@@ -66,7 +92,7 @@ describe('filterAndSortCitations', () => {
     it('returns all citations when search query is empty', () => {
       const citations = buildCitations(3);
 
-      const result = filterAndSortCitations(citations, '', '', 'citations');
+      const result = filterAndSortCitations(citations, '', '', DESC_CITATIONS);
 
       expect(result).toHaveLength(3);
     });
@@ -78,7 +104,7 @@ describe('filterAndSortCitations', () => {
         buildCitation({ url: 'https://other.com/hotels' }),
       ];
 
-      const result = filterAndSortCitations(citations, 'hotels', '', 'citations');
+      const result = filterAndSortCitations(citations, 'hotels', '', DESC_CITATIONS);
 
       expect(result).toHaveLength(2);
       expect(result.every(c => c.url.includes('hotels'))).toBe(true);
@@ -87,7 +113,7 @@ describe('filterAndSortCitations', () => {
     it('matches search query case-insensitively', () => {
       const citations = [buildCitation({ url: 'https://example.com/HOTELS' })];
 
-      const result = filterAndSortCitations(citations, 'hotels', '', 'citations');
+      const result = filterAndSortCitations(citations, 'hotels', '', DESC_CITATIONS);
 
       expect(result).toHaveLength(1);
     });
@@ -95,7 +121,7 @@ describe('filterAndSortCitations', () => {
     it('returns empty array when no citations match search query', () => {
       const citations = [buildCitation({ url: 'https://example.com/article' })];
 
-      const result = filterAndSortCitations(citations, 'nonexistent', '', 'citations');
+      const result = filterAndSortCitations(citations, 'nonexistent', '', DESC_CITATIONS);
 
       expect(result).toStrictEqual([]);
     });
@@ -105,7 +131,7 @@ describe('filterAndSortCitations', () => {
     it('returns all citations when minCitations is empty string', () => {
       const citations = buildCitations(3);
 
-      const result = filterAndSortCitations(citations, '', '', 'citations');
+      const result = filterAndSortCitations(citations, '', '', DESC_CITATIONS);
 
       expect(result).toHaveLength(3);
     });
@@ -117,7 +143,7 @@ describe('filterAndSortCitations', () => {
         buildCitation({ citation_count: 3 }),
       ];
 
-      const result = filterAndSortCitations(citations, '', 5, 'citations');
+      const result = filterAndSortCitations(citations, '', 5, DESC_CITATIONS);
 
       expect(result).toHaveLength(2);
       expect(result.every(c => c.citation_count >= 5)).toBe(true);
@@ -126,14 +152,14 @@ describe('filterAndSortCitations', () => {
     it('returns empty array when no citations meet minimum', () => {
       const citations = [buildCitation({ citation_count: 2 })];
 
-      const result = filterAndSortCitations(citations, '', 10, 'citations');
+      const result = filterAndSortCitations(citations, '', 10, DESC_CITATIONS);
 
       expect(result).toStrictEqual([]);
     });
   });
 
   describe('sorting', () => {
-    it('sorts by citation_count descending when sortBy is citations', () => {
+    it('sorts by citation_count descending when sort is citations desc', () => {
       const citations = [
         buildCitation({
           url: 'a',
@@ -149,12 +175,33 @@ describe('filterAndSortCitations', () => {
         }),
       ];
 
-      const result = filterAndSortCitations(citations, '', '', 'citations');
+      const result = filterAndSortCitations(citations, '', '', DESC_CITATIONS);
 
       expect(result.map(c => c.citation_count)).toStrictEqual([10, 5, 3]);
     });
 
-    it('sorts by keyword_count descending when sortBy is keywords', () => {
+    it('sorts by citation_count ascending when sort is citations asc', () => {
+      const citations = [
+        buildCitation({
+          url: 'a',
+          citation_count: 5 
+        }),
+        buildCitation({
+          url: 'b',
+          citation_count: 10 
+        }),
+        buildCitation({
+          url: 'c',
+          citation_count: 3 
+        }),
+      ];
+
+      const result = filterAndSortCitations(citations, '', '', ASC_CITATIONS);
+
+      expect(result.map(c => c.citation_count)).toStrictEqual([3, 5, 10]);
+    });
+
+    it('sorts by keyword_count descending when sort is keywords desc', () => {
       const citations = [
         buildCitation({
           url: 'a',
@@ -170,9 +217,62 @@ describe('filterAndSortCitations', () => {
         }),
       ];
 
-      const result = filterAndSortCitations(citations, '', '', 'keywords');
+      const result = filterAndSortCitations(citations, '', '', DESC_KEYWORDS);
 
       expect(result.map(c => c.keyword_count)).toStrictEqual([5, 2, 1]);
+    });
+
+    it('sorts by keyword_count ascending when sort is keywords asc', () => {
+      const citations = [
+        buildCitation({
+          url: 'a',
+          keyword_count: 2 
+        }),
+        buildCitation({
+          url: 'b',
+          keyword_count: 5 
+        }),
+        buildCitation({
+          url: 'c',
+          keyword_count: 1 
+        }),
+      ];
+
+      const result = filterAndSortCitations(citations, '', '', ASC_KEYWORDS);
+
+      expect(result.map(c => c.keyword_count)).toStrictEqual([1, 2, 5]);
+    });
+
+    it('sorts by domain ascending when sort is domain asc', () => {
+      const citations = [
+        buildCitation({ url: 'https://zebra.com/page' }),
+        buildCitation({ url: 'https://alpha.com/page' }),
+        buildCitation({ url: 'https://middle.com/page' }),
+      ];
+
+      const result = filterAndSortCitations(citations, '', '', ASC_DOMAIN);
+
+      expect(result.map(c => c.url)).toStrictEqual([
+        'https://alpha.com/page',
+        'https://middle.com/page',
+        'https://zebra.com/page',
+      ]);
+    });
+
+    it('sorts by domain descending when sort is domain desc', () => {
+      const citations = [
+        buildCitation({ url: 'https://zebra.com/page' }),
+        buildCitation({ url: 'https://alpha.com/page' }),
+        buildCitation({ url: 'https://middle.com/page' }),
+      ];
+
+      const result = filterAndSortCitations(citations, '', '', DESC_DOMAIN);
+
+      expect(result.map(c => c.url)).toStrictEqual([
+        'https://zebra.com/page',
+        'https://middle.com/page',
+        'https://alpha.com/page',
+      ]);
     });
 
     it('treats undefined keyword_count as 0 when sorting', () => {
@@ -187,7 +287,7 @@ describe('filterAndSortCitations', () => {
         }),
       ];
 
-      const result = filterAndSortCitations(citations, '', '', 'keywords');
+      const result = filterAndSortCitations(citations, '', '', DESC_KEYWORDS);
 
       expect(result[0].keyword_count).toBe(3);
       expect(result[1].keyword_count).toBeUndefined();
@@ -200,7 +300,7 @@ describe('filterAndSortCitations', () => {
       ];
       const originalFirst = citations[0];
 
-      filterAndSortCitations(citations, '', '', 'citations');
+      filterAndSortCitations(citations, '', '', DESC_CITATIONS);
 
       expect(citations[0]).toBe(originalFirst);
     });
@@ -223,7 +323,7 @@ describe('filterAndSortCitations', () => {
         }),
       ];
 
-      const result = filterAndSortCitations(citations, 'hotels', 5, 'citations');
+      const result = filterAndSortCitations(citations, 'hotels', 5, DESC_CITATIONS);
 
       expect(result).toHaveLength(1);
       expect(result[0].url).toBe('https://a.com/hotels');

@@ -19,7 +19,7 @@ export const groupSearchesByKeyword = (
   searches: Search[],
   providerFilter: string,
   searchQuery: string,
-  promptFilter: string = 'all'
+  promptFilter = 'all'
 ): KeywordGroup[] => {
   const groups: Record<string, Search[]> = {};
 
@@ -97,7 +97,10 @@ interface FiltersSectionProps {
   promptFilter: string;
   setPromptFilter: (value: string) => void;
   providers: string[];
-  promptNames: { id: string; name: string }[];
+  promptNames: {
+    id: string;
+    name: string 
+  }[];
   onClear: () => void;
   onExport: () => void;
 }

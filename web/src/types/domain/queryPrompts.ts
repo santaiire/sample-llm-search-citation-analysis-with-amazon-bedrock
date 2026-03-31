@@ -4,8 +4,10 @@
 export interface QueryPrompt {
   id: string;
   name: string;
+  description?: string;
   template: string;
-  enabled: string; // "true" or "false" (DynamoDB GSI compat)
+  // "true" or "false" (DynamoDB GSI compat)
+  enabled: string;
   created_at: string;
   updated_at: string;
 }

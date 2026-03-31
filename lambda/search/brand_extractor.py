@@ -12,6 +12,7 @@ not exact string matching. This allows the LLM to understand brand hierarchies
 import json
 import logging
 import os
+import time
 import boto3
 from typing import List, Dict, Any, Optional
 
@@ -27,41 +28,50 @@ bedrock = boto3.client('bedrock-runtime')
 DEFAULT_MODEL_ID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
-def invoke_converse(prompt: str, model_id: str = DEFAULT_MODEL_ID, max_tokens: int = 2000, temperature: float = 0) -> str:
+def invoke_converse(prompt: str, model_id: str = DEFAULT_MODEL_ID, max_tokens: int = 2000, temperature: float = 0, max_retries: int = 3) -> str:
     """
-    Invoke Bedrock using the Converse API.
+    Invoke Bedrock using the Converse API with retry logic.
     
     Args:
         prompt: The prompt to send
         model_id: Model ID to use
         max_tokens: Maximum tokens in response
         temperature: Temperature for generation
+        max_retries: Maximum number of retry attempts for throttling errors
         
     Returns:
         Response text from the model
     """
-    logger.info(f"Invoking Bedrock Converse API with model: {model_id}")
-    try:
-        response = bedrock.converse(
-            modelId=model_id,
-            messages=[
-                {'role': 'user', 'content': [{'text': prompt}]}
-            ],
-            inferenceConfig={
-                'maxTokens': max_tokens,
-                'temperature': temperature
-            }
-        )
-        
-        output = response.get('output', {})
-        message = output.get('message', {})
-        content_blocks = message.get('content', [])
-        result = content_blocks[0].get('text', '') if content_blocks else ''
-        logger.info(f"Bedrock response received, length: {len(result)} chars")
-        return result
-    except Exception as e:
-        logger.error(f"Bedrock Converse API call failed: {str(e)}")
-        raise
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Invoking Bedrock Converse API with model: {model_id} (attempt {attempt + 1}/{max_retries})")
+            response = bedrock.converse(
+                modelId=model_id,
+                messages=[
+                    {'role': 'user', 'content': [{'text': prompt}]}
+                ],
+                inferenceConfig={
+                    'maxTokens': max_tokens,
+                    'temperature': temperature
+                }
+            )
+            
+            output = response.get('output', {})
+            message = output.get('message', {})
+            content_blocks = message.get('content', [])
+            result = content_blocks[0].get('text', '') if content_blocks else ''
+            logger.info(f"Bedrock response received, length: {len(result)} chars")
+            return result
+        except Exception as e:
+            error_str = str(e)
+            is_throttle = 'ThrottlingException' in error_str or 'TooManyRequestsException' in error_str or 'ServiceUnavailableException' in error_str
+            if is_throttle and attempt < max_retries - 1:
+                wait_time = (2 ** attempt) + 1
+                logger.warning(f"Bedrock throttled (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s: {error_str}")
+                time.sleep(wait_time)
+                continue
+            logger.error(f"Bedrock Converse API call failed: {error_str}")
+            raise
 
 # Industry presets with pre-built extraction prompts
 INDUSTRY_PRESETS = {
@@ -173,7 +183,7 @@ class LLMBrandExtractor:
         
         try:
             # Call Bedrock using Converse API
-            response_text = invoke_converse(prompt, self.model_id, max_tokens=2000, temperature=0)
+            response_text = invoke_converse(prompt, self.model_id, max_tokens=4000, temperature=0)
             
             if not response_text:
                 logger.warning("Empty response from Bedrock")
@@ -323,32 +333,51 @@ JSON OUTPUT:"""
     def _parse_llm_response(self, response_text: str) -> List[Dict[str, Any]]:
         """Parse the LLM's JSON response."""
         try:
-            # Strip markdown code blocks if present (```json ... ``` or ``` ... ```)
             cleaned_text = response_text.strip()
             
             # Handle markdown code blocks (with or without language specifier)
             if '```' in cleaned_text:
-                # Find the first ``` and remove everything up to and including the newline after it
+                # Find content between first ``` and last ```
                 start_fence = cleaned_text.find('```')
                 if start_fence != -1:
-                    # Find the newline after the opening fence
                     newline_after_fence = cleaned_text.find('\n', start_fence)
                     if newline_after_fence != -1:
-                        cleaned_text = cleaned_text[newline_after_fence + 1:]
-                    # Remove closing fence
-                    end_fence = cleaned_text.rfind('```')
+                        after_fence = cleaned_text[newline_after_fence + 1:]
+                    else:
+                        after_fence = cleaned_text[start_fence + 3:]
+                    # Remove closing fence if present
+                    end_fence = after_fence.rfind('```')
                     if end_fence != -1:
-                        cleaned_text = cleaned_text[:end_fence].strip()
+                        cleaned_text = after_fence[:end_fence].strip()
+                    else:
+                        # No closing fence (truncated response) — use everything after opening fence
+                        cleaned_text = after_fence.strip()
             
-            # Try to extract JSON from response
+            # Try to extract JSON array from response
             start_idx = cleaned_text.find('[')
             end_idx = cleaned_text.rfind(']') + 1
             
-            if start_idx == -1 or end_idx == 0:
-                logger.warning(f"No JSON array found in LLM response. Response preview: {response_text[:500]}")
+            if start_idx == -1:
+                logger.warning(f"No JSON array found in LLM response. Cleaned text preview: {cleaned_text[:300]}")
+                logger.warning(f"Original response preview: {response_text[:300]}")
                 return []
             
-            json_str = cleaned_text[start_idx:end_idx]
+            if end_idx == 0:
+                # No closing bracket — response was likely truncated by max_tokens
+                # Try to salvage by finding the last complete JSON object
+                logger.warning("JSON array not closed (likely truncated). Attempting to salvage partial response.")
+                partial = cleaned_text[start_idx:]
+                # Find the last complete object (ends with })
+                last_brace = partial.rfind('}')
+                if last_brace != -1:
+                    json_str = partial[:last_brace + 1] + ']'
+                    logger.info(f"Salvaged partial JSON: {len(json_str)} chars")
+                else:
+                    logger.warning("Could not salvage truncated JSON response")
+                    return []
+            else:
+                json_str = cleaned_text[start_idx:end_idx]
+            
             brands = json.loads(json_str)
             
             # Validate structure
@@ -380,10 +409,9 @@ def extract_brands_from_response(response_text: str, config: Optional[Dict] = No
     Returns:
         Dict with 'brands' (list of mentions) and 'brand_count'
     """
-    # Try to load config from DynamoDB if not provided or empty
-    if not config:
+    # Try to load config from DynamoDB if not provided
+    if config is None:
         loaded_config = get_brand_config()
-        # Use loaded config only if it has actual content
         config = loaded_config if loaded_config else None
         logger.info(f"Loaded brand config from DynamoDB: {bool(config)}, industry: {config.get('industry') if config else 'default'}")
     

@@ -1,5 +1,8 @@
 /**
- * Query Prompts Manager — CRUD UI for persona-based query templates.
+ * Personas Manager — CRUD UI for persona-based query templates.
+ *
+ * Each persona represents a user profile (e.g. "Family Traveler", "Student")
+ * whose context is injected into AI queries to see how responses change.
  */
 import { useState } from 'react';
 import { useQueryPrompts } from '../../hooks/useQueryPrompts';
@@ -17,20 +20,23 @@ function PromptPreview({ template }: { readonly template: string }) {
   );
 }
 
-function PromptForm({
+function PersonaForm({
   onSubmit,
   initialName = '',
+  initialDescription = '',
   initialTemplate = '',
-  submitLabel = 'Create',
+  submitLabel = 'Create Persona',
   onCancel,
 }: {
-  readonly onSubmit: (name: string, template: string) => Promise<void>;
+  readonly onSubmit: (name: string, template: string, description: string) => Promise<void>;
   readonly initialName?: string;
+  readonly initialDescription?: string;
   readonly initialTemplate?: string;
   readonly submitLabel?: string;
   readonly onCancel?: () => void;
 }) {
   const [name, setName] = useState(initialName);
+  const [description, setDescription] = useState(initialDescription);
   const [template, setTemplate] = useState(initialTemplate);
   const [saving, setSaving] = useState(false);
   const [validationError, setValidationError] = useState('');
@@ -45,9 +51,10 @@ function PromptForm({
     setValidationError('');
     setSaving(true);
     try {
-      await onSubmit(name.trim(), template.trim());
-      if (submitLabel === 'Create') {
+      await onSubmit(name.trim(), template.trim(), description.trim());
+      if (submitLabel === 'Create Persona') {
         setName('');
+        setDescription('');
         setTemplate('');
       }
     } finally {
@@ -58,35 +65,51 @@ function PromptForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-3">
       <div>
-        <label htmlFor="prompt-name" className="block text-sm font-medium text-gray-700 mb-1">
+        <label htmlFor="persona-name" className="block text-sm font-medium text-gray-700 mb-1">
           Persona Name
         </label>
         <input
-          id="prompt-name"
+          id="persona-name"
           type="text"
           value={name}
           onChange={e => setName(e.target.value)}
-          placeholder="e.g. Family Traveler"
+          placeholder="e.g. Family Traveler, Student, Business Executive"
           className="w-full p-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-gray-900"
           maxLength={100}
           required
         />
       </div>
       <div>
-        <label htmlFor="prompt-template" className="block text-sm font-medium text-gray-700 mb-1">
+        <label htmlFor="persona-description" className="block text-sm font-medium text-gray-700 mb-1">
+          Persona Description
+        </label>
+        <textarea
+          id="persona-description"
+          value={description}
+          onChange={e => setDescription(e.target.value)}
+          placeholder="e.g. I am a father of 3 kids, we live in Switzerland and we are looking for family-friendly travel destinations with activities for children aged 5-12..."
+          className="w-full p-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-gray-900 min-h-[60px]"
+          maxLength={1000}
+        />
+        <p className="text-xs text-gray-400 mt-1">
+          Describe who this persona is. This helps you remember the context behind each persona.
+        </p>
+      </div>
+      <div>
+        <label htmlFor="persona-template" className="block text-sm font-medium text-gray-700 mb-1">
           Query Template
         </label>
         <textarea
-          id="prompt-template"
+          id="persona-template"
           value={template}
           onChange={e => { setTemplate(e.target.value); setValidationError(''); }}
-          placeholder="e.g. As a family traveler with 3 kids, what are the best hotels for {keyword}?"
+          placeholder="e.g. As a father of 3 kids living in Switzerland looking for family travel, what are the best options for {keyword}?"
           className="w-full p-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-gray-900 min-h-[80px]"
           maxLength={2000}
           required
         />
         <p className="text-xs text-gray-400 mt-1">
-          Use <code className="bg-gray-100 px-1 rounded">{'{keyword}'}</code> where the search keyword should be inserted.
+          This is the actual prompt sent to AI providers. Use <code className="bg-gray-100 px-1 rounded">{'{keyword}'}</code> where the search keyword should be inserted.
         </p>
         {validationError && (
           <p className="text-xs text-red-600 mt-1">{validationError}</p>
@@ -111,7 +134,7 @@ function PromptForm({
   );
 }
 
-function PromptRow({
+function PersonaRow({
   prompt,
   onToggle,
   onUpdate,
@@ -119,7 +142,11 @@ function PromptRow({
 }: {
   readonly prompt: QueryPrompt;
   readonly onToggle: (id: string) => Promise<unknown>;
-  readonly onUpdate: (id: string, updates: { name?: string; template?: string }) => Promise<unknown>;
+  readonly onUpdate: (id: string, updates: {
+    name?: string;
+    template?: string;
+    description?: string 
+  }) => Promise<unknown>;
   readonly onDelete: (id: string) => Promise<unknown>;
 }) {
   const [editing, setEditing] = useState(false);
@@ -140,12 +167,17 @@ function PromptRow({
   if (editing) {
     return (
       <div className="p-4 border border-gray-200 rounded-lg">
-        <PromptForm
+        <PersonaForm
           initialName={prompt.name}
+          initialDescription={prompt.description ?? ''}
           initialTemplate={prompt.template}
           submitLabel="Save"
-          onSubmit={async (name, template) => {
-            await onUpdate(prompt.id, { name, template });
+          onSubmit={async (name, template, description) => {
+            await onUpdate(prompt.id, {
+              name,
+              template,
+              description 
+            });
             setEditing(false);
           }}
           onCancel={() => setEditing(false)}
@@ -154,17 +186,24 @@ function PromptRow({
     );
   }
 
+  const statusClass = isEnabled ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500';
+  const statusLabel = isEnabled ? 'Enabled' : 'Disabled';
+  const rowClass = isEnabled ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60';
+
   return (
-    <div className={`p-4 border rounded-lg ${isEnabled ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60'}`}>
+    <div className={`p-4 border rounded-lg ${rowClass}`}>
       <div className="flex items-center justify-between">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="font-medium text-sm text-gray-900">{prompt.name}</span>
-            <span className={`text-xs px-2 py-0.5 rounded ${isEnabled ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-              {isEnabled ? 'Enabled' : 'Disabled'}
+            <span className={`text-xs px-2 py-0.5 rounded ${statusClass}`}>
+              {statusLabel}
             </span>
           </div>
-          <p className="text-xs text-gray-500 mt-1 truncate">{prompt.template}</p>
+          {prompt.description && (
+            <p className="text-xs text-gray-600 mt-1">{prompt.description}</p>
+          )}
+          <p className="text-xs text-gray-400 mt-1 truncate">{prompt.template}</p>
         </div>
         <div className="flex items-center gap-1 ml-3">
           <button
@@ -172,15 +211,17 @@ function PromptRow({
             disabled={toggling}
             className="p-1.5 text-gray-400 hover:text-gray-600 rounded"
             title={isEnabled ? 'Disable' : 'Enable'}
-            aria-label={isEnabled ? 'Disable prompt' : 'Enable prompt'}
+            aria-label={isEnabled ? 'Disable persona' : 'Enable persona'}
           >
-            {toggling ? '...' : isEnabled ? '⏸' : '▶'}
+            {toggling && '...'}
+            {!toggling && isEnabled && '⏸'}
+            {!toggling && !isEnabled && '▶'}
           </button>
           <button
             onClick={() => setEditing(true)}
             className="p-1.5 text-gray-400 hover:text-gray-600 rounded"
             title="Edit"
-            aria-label="Edit prompt"
+            aria-label="Edit persona"
           >
             ✏️
           </button>
@@ -189,7 +230,7 @@ function PromptRow({
             disabled={deleting}
             className="p-1.5 text-gray-400 hover:text-red-600 rounded"
             title="Delete"
-            aria-label="Delete prompt"
+            aria-label="Delete persona"
           >
             {deleting ? '...' : '🗑'}
           </button>
@@ -200,16 +241,19 @@ function PromptRow({
 }
 
 export function QueryPromptsManager() {
-  const { prompts, loading, error, createPrompt, updatePrompt, deletePrompt, togglePrompt } = useQueryPrompts();
+  const {
+    prompts, loading, error, createPrompt, updatePrompt, deletePrompt, togglePrompt 
+  } = useQueryPrompts();
   const [showCreate, setShowCreate] = useState(false);
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold text-gray-900">Query Prompts</h3>
+          <h3 className="text-lg font-semibold text-gray-900">Personas</h3>
           <p className="text-sm text-gray-500">
-            Define persona-based search templates. Each prompt runs against every keyword during analysis.
+            Define user personas to see how AI providers change their responses based on who is asking.
+            Each persona runs against every keyword during analysis, giving you a keywords × providers × personas matrix.
           </p>
         </div>
         {!showCreate && prompts.length < 10 && (
@@ -217,7 +261,7 @@ export function QueryPromptsManager() {
             onClick={() => setShowCreate(true)}
             className="px-3 py-1.5 bg-gray-900 text-white rounded-lg text-sm hover:bg-gray-800"
           >
-            + New Prompt
+            + New Persona
           </button>
         )}
       </div>
@@ -228,9 +272,9 @@ export function QueryPromptsManager() {
 
       {showCreate && (
         <div className="p-4 border border-gray-300 rounded-lg bg-gray-50">
-          <PromptForm
-            onSubmit={async (name, template) => {
-              await createPrompt(name, template);
+          <PersonaForm
+            onSubmit={async (name, template, description) => {
+              await createPrompt(name, template, description || undefined);
               setShowCreate(false);
             }}
             onCancel={() => setShowCreate(false)}
@@ -238,17 +282,22 @@ export function QueryPromptsManager() {
         </div>
       )}
 
-      {loading ? (
-        <div className="text-sm text-gray-400 py-4 text-center">Loading prompts...</div>
-      ) : prompts.length === 0 && !showCreate ? (
+      {loading && (
+        <div className="text-sm text-gray-400 py-4 text-center">Loading personas...</div>
+      )}
+      {!loading && prompts.length === 0 && !showCreate && (
         <div className="text-center py-8 text-gray-400">
-          <p className="text-sm">No query prompts yet.</p>
-          <p className="text-xs mt-1">Create one to run persona-based searches across your keywords.</p>
+          <p className="text-sm">No personas configured yet.</p>
+          <p className="text-xs mt-1">Create a persona to see how AI responses change based on user context.</p>
+          <p className="text-xs mt-2 text-gray-300">
+            Example: "I am a father of 3 living in Switzerland looking for family travel destinations"
+          </p>
         </div>
-      ) : (
+      )}
+      {!loading && prompts.length > 0 && (
         <div className="space-y-2">
           {prompts.map(prompt => (
-            <PromptRow
+            <PersonaRow
               key={prompt.id}
               prompt={prompt}
               onToggle={togglePrompt}
@@ -261,7 +310,7 @@ export function QueryPromptsManager() {
 
       {prompts.length > 0 && (
         <p className="text-xs text-gray-400">
-          {prompts.filter(p => p.enabled === 'true').length} of {prompts.length} prompts enabled
+          {prompts.filter(p => p.enabled === 'true').length} of {prompts.length} personas enabled
           · Each analysis run will execute {prompts.filter(p => p.enabled === 'true').length || 1} queries per keyword per provider
         </p>
       )}

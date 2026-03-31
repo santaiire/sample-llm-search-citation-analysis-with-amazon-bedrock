@@ -9,6 +9,13 @@ import {
 } from '../infrastructure';
 import type { QueryPrompt } from '../types';
 
+class QueryPromptError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'QueryPromptError';
+  }
+}
+
 export function useQueryPrompts() {
   const [prompts, setPrompts] = useState<QueryPrompt[]>([]);
   const [loading, setLoading] = useState(true);
@@ -19,7 +26,7 @@ export function useQueryPrompts() {
       setLoading(true);
       setError(null);
       const response = await authenticatedFetch(`${API_BASE_URL}/query-prompts`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) throw new QueryPromptError(`HTTP ${response.status}`);
       const data: unknown = await response.json();
       setPrompts(Array.isArray(data) ? data as QueryPrompt[] : []);
     } catch (err) {
@@ -34,7 +41,7 @@ export function useQueryPrompts() {
     fetchPrompts();
   }, [fetchPrompts]);
 
-  const createPrompt = useCallback(async (name: string, template: string) => {
+  const createPrompt = useCallback(async (name: string, template: string, description?: string) => {
     setError(null);
     try {
       const response = await authenticatedFetch(`${API_BASE_URL}/query-prompts`, {
@@ -42,10 +49,11 @@ export function useQueryPrompts() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name,
-          template 
+          template,
+          ...(description ? { description } : {}),
         }),
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) throw new QueryPromptError(`HTTP ${response.status}`);
       const created = await response.json() as QueryPrompt;
       setPrompts(prev => [created, ...prev]);
       return created;
@@ -58,7 +66,8 @@ export function useQueryPrompts() {
 
   const updatePrompt = useCallback(async (id: string, updates: {
     name?: string;
-    template?: string 
+    template?: string;
+    description?: string;
   }) => {
     setError(null);
     try {
@@ -67,7 +76,7 @@ export function useQueryPrompts() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) throw new QueryPromptError(`HTTP ${response.status}`);
       const updated = await response.json() as QueryPrompt;
       setPrompts(prev => prev.map(p => p.id === id ? updated : p));
       return updated;
@@ -82,7 +91,7 @@ export function useQueryPrompts() {
     setError(null);
     try {
       const response = await authenticatedFetch(`${API_BASE_URL}/query-prompts/${id}`, {method: 'DELETE',});
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) throw new QueryPromptError(`HTTP ${response.status}`);
       setPrompts(prev => prev.filter(p => p.id !== id));
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to delete prompt';
@@ -95,7 +104,7 @@ export function useQueryPrompts() {
     setError(null);
     try {
       const response = await authenticatedFetch(`${API_BASE_URL}/query-prompts/${id}`, {method: 'PATCH',});
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) throw new QueryPromptError(`HTTP ${response.status}`);
       const updated = await response.json() as QueryPrompt;
       setPrompts(prev => prev.map(p => p.id === id ? updated : p));
       return updated;
