@@ -19,6 +19,25 @@ import * as fs from 'fs';
 import { Auth } from './constructs/auth';
 
 /**
+ * Bedrock model tier defaults per task role.
+ *
+ * Tiers map to model families in lambda/shared/models.py:
+ *   fast     -> Haiku
+ *   balanced -> Sonnet
+ *   deep     -> Opus
+ *
+ * Lambdas read BEDROCK_TIER_<ROLE> and resolve the model ID via
+ * shared.models.get_model_id(). To pin a specific model ID in an incident,
+ * set BEDROCK_MODEL_<ROLE> (takes precedence over the tier).
+ */
+const bedrockTierEnv = {
+  BEDROCK_TIER_SUMMARIZATION: 'fast',
+  BEDROCK_TIER_EXTRACTION:    'fast',
+  BEDROCK_TIER_GENERATION:    'fast',
+  BEDROCK_TIER_ANALYSIS:      'balanced',
+} as const;
+
+/**
  * Creates optimized Lambda code bundle containing only the specific handler file
  * plus shared utilities (decimal_utils.py). This reduces deployment package size
  * and improves cold start times compared to bundling all API handlers together.
@@ -708,6 +727,7 @@ export class CitationAnalysisStack extends cdk.Stack {
         SECRETS_PREFIX: 'citation-analysis/',
         RAW_RESPONSES_BUCKET: rawResponsesBucket.bucketName,
         PROVIDER_CONFIG_TABLE: providerConfigTable.tableName,
+        ...bedrockTierEnv,
       },
     });
 
@@ -811,9 +831,9 @@ export class CitationAnalysisStack extends cdk.Stack {
       logGroup: crawlerLogGroup,
       environment: {
         DYNAMODB_TABLE_CRAWLED_CONTENT: crawledContentTable.tableName,
-        BEDROCK_MODEL_ID: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
         SCREENSHOTS_BUCKET: screenshotsBucket.bucketName,
         BROWSER_ID: crawlerBrowser.attrBrowserId, // Pre-created browser with Web Bot Auth
+        ...bedrockTierEnv,
       },
     });
 
@@ -1159,6 +1179,7 @@ export class CitationAnalysisStack extends cdk.Stack {
         DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName,
         DYNAMODB_TABLE_KEYWORDS: keywordsTable.tableName,
         PROVIDER_CONFIG_TABLE: providerConfigTable.tableName,
+        ...bedrockTierEnv,
       },
     });
 
@@ -1216,7 +1237,7 @@ export class CitationAnalysisStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
       description: 'API: Manage brand tracking configuration',
-      environment: {DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName,},
+      environment: {DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName, ...bedrockTierEnv},
     });
 
     // Consolidated Keyword Management Lambda (get-keywords + manage-keywords + keyword-research)
@@ -1770,6 +1791,7 @@ export class CitationAnalysisStack extends cdk.Stack {
         DYNAMODB_TABLE_KEYWORDS: keywordsTable.tableName,
         DYNAMODB_TABLE_SELF_REFLECTION: selfReflectionTable.tableName,
         GENERATION_TIMEOUT_SECONDS: '240',
+        ...bedrockTierEnv,
       },
     });
     searchResultsTable.grantReadData(contentStudioFunction);
