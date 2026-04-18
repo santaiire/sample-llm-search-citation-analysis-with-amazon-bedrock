@@ -15,14 +15,15 @@ sys.path.insert(0, '/opt/python')
 
 from shared.api_response import success_response
 from shared.decorators import api_handler, optional_limit, validate
+from shared.env_vars import resolve_table_env
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 dynamodb = boto3.resource('dynamodb')
 
-# Fail-fast: Required environment variables
-KEYWORDS_TABLE = os.environ['KEYWORDS_TABLE']
+# Fail-fast: Required environment variables (audit #12 canonical naming).
+KEYWORDS_TABLE = resolve_table_env('DYNAMODB_TABLE_KEYWORDS', 'KEYWORDS_TABLE')
 keywords_table = dynamodb.Table(KEYWORDS_TABLE)
 
 # Valid values

@@ -12,6 +12,7 @@ from typing import Any
 import boto3
 
 from shared.constants import MAX_CITATIONS_PER_KEYWORD_DEFAULT
+from shared.env_vars import resolve_table_env
 from shared.step_function_response import log_error, step_function_success
 
 # Import shared utilities
@@ -24,9 +25,13 @@ logger.setLevel(logging.INFO)
 # Initialize DynamoDB client
 dynamodb = boto3.resource('dynamodb')
 
-# Fail-fast: Required environment variables
-CITATIONS_TABLE_NAME = os.environ['CITATIONS_TABLE_NAME']
-citations_table = dynamodb.Table(CITATIONS_TABLE_NAME)
+# Fail-fast: Required environment variables. Reads the canonical
+# DYNAMODB_TABLE_CITATIONS name first, falls back to the legacy
+# CITATIONS_TABLE_NAME until the CDK stack stops setting it (audit #12).
+CITATIONS_TABLE = resolve_table_env(
+    'DYNAMODB_TABLE_CITATIONS', 'CITATIONS_TABLE_NAME', 'CITATIONS_TABLE',
+)
+citations_table = dynamodb.Table(CITATIONS_TABLE)
 
 # Runtime override for the citations-per-keyword cap. Defaults to the shared
 # constant; setting `MAX_CITATIONS_PER_KEYWORD` in the Lambda environment lets

@@ -18,6 +18,7 @@ sys.path.insert(0, '/opt/python')
 
 from shared.api_response import success_response
 from shared.decorators import api_handler, validate
+from shared.env_vars import resolve_table_env
 from shared.utils import get_brand_config
 
 logger = logging.getLogger(__name__)
@@ -25,8 +26,8 @@ logger.setLevel(logging.INFO)
 
 dynamodb = boto3.resource('dynamodb')
 
-# Fail-fast: Required environment variables
-CITATIONS_TABLE = os.environ['CITATIONS_TABLE']
+# Fail-fast: Required environment variables (audit #12 canonical naming).
+CITATIONS_TABLE = resolve_table_env('DYNAMODB_TABLE_CITATIONS', 'CITATIONS_TABLE')
 citations_table = dynamodb.Table(CITATIONS_TABLE)
 
 # Optional: Brand config table for dynamic brand detection

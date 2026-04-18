@@ -34,8 +34,9 @@ def get_enabled_provider_count(table_name: str | None = None) -> int:
     """Return the number of providers currently enabled in the config table.
 
     Fallback rules:
-    - If ``PROVIDER_CONFIG_TABLE`` (or the passed ``table_name``) is not
-      set, return ``len(PROVIDERS)`` (treat all providers as enabled).
+    - If ``DYNAMODB_TABLE_PROVIDER_CONFIG`` (or legacy ``PROVIDER_CONFIG_TABLE``,
+      or the passed ``table_name``) is not set, return ``len(PROVIDERS)``
+      (treat all providers as enabled).
     - If the table scan raises, log and return ``len(PROVIDERS)`` —
       provider-count is a denominator in visibility-score math and
       returning zero would produce div-by-zero or useless metrics.
@@ -45,10 +46,14 @@ def get_enabled_provider_count(table_name: str | None = None) -> int:
       convention).
 
     Args:
-        table_name: Override the ``PROVIDER_CONFIG_TABLE`` env var for
+        table_name: Override the ``DYNAMODB_TABLE_PROVIDER_CONFIG`` env var for
             testing. Production callers should omit.
     """
-    resolved = table_name or os.environ.get('PROVIDER_CONFIG_TABLE')
+    resolved = (
+        table_name
+        or os.environ.get('DYNAMODB_TABLE_PROVIDER_CONFIG')
+        or os.environ.get('PROVIDER_CONFIG_TABLE')
+    )
     if not resolved:
         return len(PROVIDERS)
 
