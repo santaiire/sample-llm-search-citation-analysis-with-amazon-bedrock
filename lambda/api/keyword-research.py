@@ -28,6 +28,7 @@ from bs4 import BeautifulSoup
 
 from shared.api_response import error_response, success_response, validation_error
 from shared.decorators import api_handler, parse_json_body, route_handler, validate
+from shared.prompt_safety import wrap_user_input
 from shared.url_validator import validate_url_safe
 
 # Configure logging
@@ -245,7 +246,23 @@ def fetch_page_seo_elements(url: str) -> dict[str, Any]:
     """
     Fetch a webpage and extract SEO-relevant elements.
     Used as supplementary data for AI analysis.
+
+    Performs its own SSRF validation (rebind-safe) so a direct future
+    caller can't bypass the check — `validate_url_safe` is already called
+    in the async competitor flow, but belt-and-suspenders.
     """
+    # Re-validate here. This is a cheap defense-in-depth check — the
+    # primary SSRF gate lives in `_analyze_competitor`, but placing it
+    # here ensures any future caller of this function is protected.
+    is_safe, ssrf_error = validate_url_safe(url)
+    if not is_safe:
+        logger.warning("fetch_page_seo_elements rejected URL: %s", ssrf_error)
+        return {
+            'success': False,
+            'error': f'URL rejected: {ssrf_error}',
+            'domain': urlparse(url).netloc.replace('www.', ''),
+        }
+
     try:
         headers = {
             'User-Agent': USER_AGENT,
@@ -466,7 +483,7 @@ def _process_expand_sync(research_id: str, seed_keyword: str, industry: str, cou
         if not all_clients:
             raise Exception("No API keys configured")
 
-        prompt = f"""Search the web for keyword research data about "{seed_keyword}" in the {industry} industry.
+        prompt = f"""Search the web for keyword research data about {wrap_user_input(seed_keyword, "seed_keyword")} in the {wrap_user_input(industry, "industry")} industry.
 
 Find {count} related keywords that people actually search for. Use your web search to find:
 - Popular search queries related to this topic
@@ -533,17 +550,30 @@ def _process_competitor_sync(research_id: str, competitor_url: str, domain: str)
         if not all_clients:
             raise Exception("No API keys configured")
 
+        # Page SEO elements came from a scraped-on-the-web page so treat as
+        # untrusted. Wrap each field.
         seo_context = ""
         if page_data.get('success'):
+            title_tag = wrap_user_input(page_data.get('title', 'N/A'), "page_title")
+            meta_tag = wrap_user_input(
+                page_data.get('meta_description', 'N/A'), "page_meta", max_length=2000
+            )
+            h1_wrapped = ', '.join(
+                wrap_user_input(h, "h1") for h in page_data.get('h1_tags', [])[:3]
+            ) or 'N/A'
+            h2_wrapped = ', '.join(
+                wrap_user_input(h, "h2") for h in page_data.get('h2_tags', [])[:5]
+            ) or 'N/A'
             seo_context = f"""
 Page SEO Elements (from direct scrape):
-- Title: {page_data.get('title', 'N/A')}
-- Meta Description: {page_data.get('meta_description', 'N/A')}
-- H1 Tags: {', '.join(page_data.get('h1_tags', [])[:3]) or 'N/A'}
-- H2 Tags: {', '.join(page_data.get('h2_tags', [])[:5]) or 'N/A'}
+- Title: {title_tag}
+- Meta Description: {meta_tag}
+- H1 Tags: {h1_wrapped}
+- H2 Tags: {h2_wrapped}
 """
 
-        prompt = f"""Search the web to find HIGH-TRAFFIC, NON-BRANDED, LONG-TAIL keywords that the website "{domain}" ranks for or should target.
+        domain_tag = wrap_user_input(domain, "domain")
+        prompt = f"""Search the web to find HIGH-TRAFFIC, NON-BRANDED, LONG-TAIL keywords that the website {domain_tag} ranks for or should target.
 
 {seo_context}
 
@@ -557,7 +587,7 @@ For each keyword provide: search intent, competition level, relevance score (1-1
 
 Return ONLY valid JSON:
 {{
-  "domain": "{domain}",
+  "domain": {json.dumps(domain)},
   "industry": "detected industry",
   "page_focus": "main business focus",
   "primary_keywords": [{{"keyword": "...", "intent": "commercial", "competition": "high", "relevance": 10, "source": "..."}}],

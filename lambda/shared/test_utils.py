@@ -145,3 +145,50 @@ class TestWireFormatCompatibility:
         fixed = datetime(2026, 4, 18, 0, 0, 0, tzinfo=UTC)
         formatted = fixed.isoformat().replace('+00:00', 'Z')
         assert formatted == '2026-04-18T00:00:00Z'
+
+
+
+class TestBrandNamesMatch:
+    """Regression tests for `brand_names_match` — the helper that replaced
+    substring brand matching in get-recommendations, get-historical-trends,
+    and content-studio.
+
+    The old pattern `any(fp in name or name in fp for fp in first_party)`
+    had classic false positives ('Inn' matching 'linkedin.com' or
+    'Holiday Inn'). These tests pin the safe exact-match behavior.
+    """
+
+    def test_matches_identical_brand_names(self) -> None:
+        assert utils.brand_names_match("Marriott", "Marriott") is True
+
+    def test_is_case_insensitive(self) -> None:
+        assert utils.brand_names_match("MARRIOTT", "marriott") is True
+        assert utils.brand_names_match("Marriott Bonvoy", "marriott bonvoy") is True
+
+    def test_normalizes_surrounding_whitespace(self) -> None:
+        assert utils.brand_names_match("  Marriott  ", "Marriott") is True
+
+    def test_collapses_internal_whitespace_runs(self) -> None:
+        """Dashboard inputs sometimes have double spaces — normalize."""
+        assert utils.brand_names_match("Holiday  Inn", "Holiday Inn") is True
+
+    def test_does_not_match_substring_regression_guard(self) -> None:
+        """The classic bug from audit items 9 and 22: 'Inn' is a substring
+        of both 'Holiday Inn' and 'linkedin.com'. Exact-match only."""
+        assert utils.brand_names_match("Inn", "Holiday Inn") is False
+        assert utils.brand_names_match("Holiday Inn", "Inn") is False
+        assert utils.brand_names_match("Marriott", "Marriott Bonvoy") is False
+
+    def test_returns_false_for_empty_strings(self) -> None:
+        assert utils.brand_names_match("", "Marriott") is False
+        assert utils.brand_names_match("Marriott", "") is False
+        assert utils.brand_names_match("", "") is False
+
+    def test_returns_false_for_whitespace_only(self) -> None:
+        assert utils.brand_names_match("   ", "Marriott") is False
+
+    def test_returns_false_for_non_string_input(self) -> None:
+        assert utils.brand_names_match(None, "Marriott") is False  # type: ignore[arg-type]
+        assert utils.brand_names_match("Marriott", None) is False  # type: ignore[arg-type]
+        assert utils.brand_names_match(123, "Marriott") is False  # type: ignore[arg-type]
+        assert utils.brand_names_match(["Marriott"], "Marriott") is False  # type: ignore[arg-type]

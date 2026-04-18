@@ -31,7 +31,7 @@ from shared.api_response import success_response
 from shared.decorators import api_handler, validate
 from shared.llm_json import parse_llm_json
 from shared.models import ModelRole, invoke_bedrock
-from shared.utils import get_brand_config, get_timestamp
+from shared.utils import brand_names_match, get_brand_config, get_timestamp
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -144,11 +144,23 @@ def generate_rule_based_recommendations(config: dict[str, Any]) -> list[dict[str
                 name = brand.get('name', '').lower()
                 rank = to_int(brand.get('rank'), 999)
 
-                if any(fp in name or name in fp for fp in first_party):
+                # Prefer the LLM-assigned classification. Fall back to exact
+                # brand-name match (never substring — see audit item 9, 22).
+                classification = brand.get('classification')
+                is_first_party = classification == 'first_party' or (
+                    classification is None
+                    and any(brand_names_match(name, fp) for fp in first_party)
+                )
+                is_competitor = classification == 'competitor' or (
+                    classification is None
+                    and any(brand_names_match(name, c) for c in competitors)
+                )
+
+                if is_first_party:
                     fp_found = True
                     fp_best_rank = min(fp_best_rank, rank)
                     fp_providers.add(provider)
-                elif any(comp in name or name in comp for comp in competitors):
+                elif is_competitor:
                     comp_mentions += 1
 
         # Track provider gaps

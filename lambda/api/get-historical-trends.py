@@ -29,7 +29,7 @@ sys.path.insert(0, '/opt/python')
 from shared.api_response import success_response
 from shared.config import PROVIDERS
 from shared.decorators import api_handler, validate
-from shared.utils import get_brand_config, utc_now
+from shared.utils import brand_names_match, get_brand_config, utc_now
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -166,7 +166,14 @@ def aggregate_by_period(items: list[dict], period: str, config: dict) -> list[di
 
             for brand in brands:
                 name = brand.get('name', '').lower()
-                if any(fp in name or name in fp for fp in first_party):
+                # Prefer LLM classification; fall back to exact name match
+                # only when classification is missing (see audit items 9, 22).
+                classification = brand.get('classification')
+                is_first_party = classification == 'first_party' or (
+                    classification is None
+                    and any(brand_names_match(name, fp) for fp in first_party)
+                )
+                if is_first_party:
                     fp_mentions += to_int(brand.get('mention_count'), 1)
                     fp_providers.add(provider)
                     fp_best_rank = min(fp_best_rank, to_int(brand.get('rank'), 999))

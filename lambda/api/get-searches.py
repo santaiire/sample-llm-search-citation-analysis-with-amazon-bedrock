@@ -15,6 +15,7 @@ from boto3.dynamodb.conditions import Key
 sys.path.insert(0, '/opt/python')
 
 from shared.api_response import success_response
+from shared.config import PROVIDERS
 from shared.decorators import api_handler, optional_limit, validate
 
 logger = logging.getLogger(__name__)
@@ -66,11 +67,12 @@ def handler(event, context, keyword=None, provider=None, query_prompt_id=None, l
         items = response.get('Items', [])
 
     else:
-        # No filter - query using ProviderIndex GSI for each provider
-        providers = ['openai', 'perplexity', 'gemini', 'claude']
-        items_per_provider = max(limit // len(providers), 50)
+        # No filter - query using ProviderIndex GSI for each provider.
+        # Use the centralized PROVIDERS list so new providers (search/LLM)
+        # automatically surface here without touching this handler.
+        items_per_provider = max(limit // len(PROVIDERS), 50)
 
-        for p in providers:
+        for p in PROVIDERS:
             try:
                 response = table.query(
                     IndexName='ProviderIndex',

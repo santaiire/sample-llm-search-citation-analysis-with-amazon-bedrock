@@ -31,7 +31,8 @@ from decimal_utils import to_int
 from shared.api_response import api_response, success_response, validation_error
 from shared.decorators import api_handler, parse_json_body, route_handler, validate
 from shared.models import BedrockInvocationError, ModelRole, get_model_tier, invoke_bedrock
-from shared.utils import get_brand_config, get_timestamp, utc_now
+from shared.prompt_safety import untrusted_input_system_instruction, wrap_user_input
+from shared.utils import brand_names_match, get_brand_config, get_timestamp, utc_now
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -326,12 +327,25 @@ def generate_content_ideas(config: dict[str, Any]) -> list[dict[str, Any]]:
                 rank = to_int(brand.get('rank'), 999)
                 sentiment = brand.get('sentiment', 'neutral')
 
-                if any(fp in name or name in fp for fp in first_party):
+                # Prefer LLM classification; fall back to exact name match
+                # when missing. See audit items 9 and 22 for the substring
+                # collision bugs this replaces.
+                classification = brand.get('classification')
+                is_first_party = classification == 'first_party' or (
+                    classification is None
+                    and any(brand_names_match(name, fp) for fp in first_party)
+                )
+                is_competitor = classification == 'competitor' or (
+                    classification is None
+                    and any(brand_names_match(name, c) for c in competitors)
+                )
+
+                if is_first_party:
                     fp_found = True
                     fp_best_rank = min(fp_best_rank, rank)
                     fp_providers.add(provider)
                     fp_sentiment.append(sentiment)
-                elif any(comp in name or name in comp for comp in competitors):
+                elif is_competitor:
                     comp_mentions.append({'name': brand.get('name'), 'rank': rank, 'provider': provider})
                     competitor_citations.extend(citations)
 
@@ -445,22 +459,38 @@ def generate_content(idea: dict[str, Any], config: dict[str, Any]) -> dict[str, 
 
     tracked_brands = config.get("tracked_brands", {})
     first_party = tracked_brands.get("first_party", [])
-    brand_name = first_party[0] if first_party else "your brand"
-    industry = config.get("industry", "general")
+    brand_name_raw = first_party[0] if first_party else "your brand"
+    industry_raw = config.get("industry", "general")
 
-    # Build context from competitor content
+    # Wrap user-controlled interpolation values. Keyword, brand name, industry,
+    # and idea fields are all editable via dashboard/API input so they flow as
+    # untrusted into the Bedrock prompt. Delimiter-wrapping them plus the
+    # standing system instruction neutralizes prompt-injection payloads.
+    keyword_tag = wrap_user_input(keyword, "keyword")
+    brand_tag = wrap_user_input(brand_name_raw, "brand")
+    industry_tag = wrap_user_input(industry_raw, "industry")
+
+    # Build context from competitor content — each crawled page's title/preview
+    # is also untrusted (came from the open web).
     competitor_context = ""
     if competitor_content:
         competitor_context = "\n\nCompetitor content analysis:\n"
         for cc in competitor_content:
-            competitor_context += f"\n--- {cc['domain']} ---\n"
-            competitor_context += f"Title: {cc['title']}\n"
+            competitor_context += f"\n--- {wrap_user_input(cc.get('domain', ''), 'domain')} ---\n"
+            competitor_context += f"Title: {wrap_user_input(cc.get('title', ''), 'title')}\n"
             if cc.get('content_preview'):
-                competitor_context += f"Content preview: {cc['content_preview'][:1000]}...\n"
+                competitor_context += (
+                    "Content preview: "
+                    f"{wrap_user_input(cc['content_preview'][:1000], 'content', max_length=2000)}...\n"
+                )
+
+    # Prepend the standing system instruction so the LLM knows to treat any
+    # tagged content as data, not commands.
+    system_preamble = untrusted_input_system_instruction() + "\n\n"
 
     # Build the prompt based on content angle
     if content_angle == 'differentiation':
-        prompt = f"""Create a differentiated content piece for the keyword "{keyword}" that positions {brand_name} uniquely.
+        prompt = system_preamble + f"""Create a differentiated content piece for the keyword {keyword_tag} that positions {brand_tag} uniquely.
 
 The goal is to improve ranking from current position by offering unique value.
 {competitor_context}
@@ -472,26 +502,29 @@ Generate:
 4. A brief content outline (300-500 words)
 5. SEO recommendations (meta title, meta description, target keywords)
 
-Focus on what makes {brand_name} unique and valuable."""
+Focus on what makes {brand_tag} unique and valuable."""
 
     elif content_angle == 'provider_optimization':
         providers = idea.get('providers_missing', [])
-        prompt = f"""Create content optimized for AI search engines ({', '.join(providers)}) for the keyword "{keyword}".
+        # Provider names come from an enum-validated list at the handler
+        # boundary; safe to interpolate. Wrap defensively anyway.
+        providers_str = ", ".join(wrap_user_input(p, "provider") for p in providers)
+        prompt = system_preamble + f"""Create content optimized for AI search engines ({providers_str}) for the keyword {keyword_tag}.
 
-The goal is to get {brand_name} mentioned by these AI providers.
+The goal is to get {brand_tag} mentioned by these AI providers.
 {competitor_context}
 
 Generate:
 1. A headline optimized for AI citation
 2. Key facts and statistics that AI models love to cite
-3. Clear, authoritative statements about {brand_name}
+3. Clear, authoritative statements about {brand_tag}
 4. Structured content outline with headers
 5. FAQ section (5 questions AI assistants commonly answer)
 
 Focus on factual, citable content that AI models will reference."""
 
     elif content_angle == 'thought_leadership':
-        prompt = f"""Create thought leadership content for the keyword "{keyword}" to maintain {brand_name}'s #1 position.
+        prompt = system_preamble + f"""Create thought leadership content for the keyword {keyword_tag} to maintain {brand_tag}'s #1 position.
 
 You're already leading - this content should reinforce authority and stay ahead of competitors.
 {competitor_context}
@@ -503,10 +536,10 @@ Generate:
 4. Expert tips that only a leader would know
 5. Future trends in this space
 
-Focus on establishing {brand_name} as THE authority that others follow."""
+Focus on establishing {brand_tag} as THE authority that others follow."""
 
     elif content_angle == 'reputation_management':
-        prompt = f"""Create positive, trust-building content for the keyword "{keyword}" to improve {brand_name}'s sentiment.
+        prompt = system_preamble + f"""Create positive, trust-building content for the keyword {keyword_tag} to improve {brand_tag}'s sentiment.
 
 The goal is to address concerns and highlight strengths.
 {competitor_context}
@@ -518,11 +551,13 @@ Generate:
 4. Trust signals (awards, certifications, guarantees)
 5. FAQ addressing common concerns
 
-Focus on building trust and showcasing {brand_name}'s commitment to excellence."""
+Focus on building trust and showcasing {brand_tag}'s commitment to excellence."""
 
     elif content_angle == 'seasonal':
-        seasonal_theme = idea.get('seasonal_theme', 'current season')
-        prompt = f"""Create seasonal content for "{keyword}" tied to {seasonal_theme}.
+        seasonal_theme_tag = wrap_user_input(
+            idea.get('seasonal_theme', 'current season'), "theme"
+        )
+        prompt = system_preamble + f"""Create seasonal content for {keyword_tag} tied to {seasonal_theme_tag}.
 
 This is time-sensitive content to capture seasonal search traffic.
 {competitor_context}
@@ -534,11 +569,13 @@ Generate:
 4. Limited-time offers or experiences to highlight
 5. Call-to-action with urgency
 
-Focus on timeliness and capturing the {seasonal_theme} moment for {brand_name}."""
+Focus on timeliness and capturing the {seasonal_theme_tag} moment for {brand_tag}."""
 
     elif content_angle == 'trending':
-        trending_topic = idea.get('trending_topic', keyword)
-        prompt = f"""Create trending content about "{trending_topic}" for the {industry} industry.
+        trending_topic_tag = wrap_user_input(
+            idea.get('trending_topic', keyword), "topic"
+        )
+        prompt = system_preamble + f"""Create trending content about {trending_topic_tag} for the {industry_tag} industry.
 
 This topic is trending NOW - create content that captures the moment.
 {competitor_context}
@@ -546,14 +583,14 @@ This topic is trending NOW - create content that captures the moment.
 Generate:
 1. A headline that captures the trend
 2. Why this is trending and relevant
-3. How {brand_name} relates to this trend
+3. How {brand_tag} relates to this trend
 4. Quick tips or insights
 5. Social media hooks
 
-Focus on being timely, shareable, and positioning {brand_name} as current and relevant."""
+Focus on being timely, shareable, and positioning {brand_tag} as current and relevant."""
 
     elif content_angle == 'evergreen':
-        prompt = f"""Create comprehensive evergreen content for "{keyword}" that will rank year-round.
+        prompt = system_preamble + f"""Create comprehensive evergreen content for {keyword_tag} that will rank year-round.
 
 This should be the definitive resource on this topic.
 {competitor_context}
@@ -565,10 +602,10 @@ Generate:
 4. Internal linking opportunities
 5. Resource lists and references
 
-Focus on creating THE definitive guide that establishes {brand_name} as the go-to authority."""
+Focus on creating THE definitive guide that establishes {brand_tag} as the go-to authority."""
 
     else:  # comprehensive_guide (default)
-        prompt = f"""Create a comprehensive guide for the keyword "{keyword}" in the {industry} industry that positions {brand_name} as an authority.
+        prompt = system_preamble + f"""Create a comprehensive guide for the keyword {keyword_tag} in the {industry_tag} industry that positions {brand_tag} as an authority.
 
 {competitor_context}
 
@@ -591,10 +628,15 @@ META: [150 character meta description]
 HEADINGS: [List the H2 headings you used, comma separated]
 POINTS: [3 key takeaways as bullet points]"""
 
-    # Add output language instruction if specified
-    output_language = idea.get('output_language', 'English')
-    if output_language and output_language != 'English':
-        prompt += f"\n\nIMPORTANT: Write ALL content in {output_language}. The title, meta description, body, headings, and key points must all be in {output_language}."
+    # Add output language instruction if specified — also wrapped since the
+    # value comes from the dashboard and is free-form text.
+    output_language_raw = idea.get('output_language', 'English')
+    if output_language_raw and output_language_raw != 'English':
+        output_language_tag = wrap_user_input(output_language_raw, "language", max_length=100)
+        prompt += (
+            f"\n\nIMPORTANT: Write ALL content in {output_language_tag}. "
+            f"The title, meta description, body, headings, and key points must all be in {output_language_tag}."
+        )
 
     try:
         # Invoke shared Bedrock client with GENERATION role (Haiku default, tier-switchable)

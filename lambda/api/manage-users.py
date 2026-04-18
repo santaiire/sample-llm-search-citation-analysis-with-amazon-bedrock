@@ -3,6 +3,7 @@ User Management API
 Manages Cognito users: list, invite, update, enable/disable, reset password
 """
 
+import concurrent.futures
 import logging
 import os
 import sys
@@ -42,40 +43,75 @@ def format_user(user: dict) -> dict:
     }
 
 
-def handle_list_users(event: dict, context: Any, limit: int, offset: int, **kwargs) -> dict:
-    """GET /users - List all Cognito users with pagination."""
-    try:
-        users = []
-        pagination_token = None
+# Cap on how many Cognito pages we'll fetch in a single request. Each page
+# is up to 60 users, so the default caps at ~3000 users per list call. When
+# the frontend needs more, the migration path is to surface Cognito's own
+# PaginationToken (see audit item 17 follow-up).
+_MAX_COGNITO_PAGES = 50
 
-        # Cognito uses token-based pagination, we need to fetch all and slice
-        while True:
-            params = {
+# Max concurrent admin_list_groups_for_user calls. Cognito has no batch API
+# so we fan out; 10 threads keeps us well under the 120 RPS soft limit.
+_GROUPS_FANOUT = 10
+
+
+def _fetch_user_groups(username: str) -> list[str]:
+    """Return the list of Cognito groups for a single user, empty on error."""
+    try:
+        response = cognito_client.admin_list_groups_for_user(
+            Username=username, UserPoolId=USER_POOL_ID,
+        )
+        return [g['GroupName'] for g in response.get('Groups', [])]
+    except ClientError:
+        return []
+
+
+def handle_list_users(event: dict, context: Any, limit: int, offset: int, **kwargs) -> dict:
+    """GET /users - List all Cognito users with pagination.
+
+    Fetches Cognito pages up to `_MAX_COGNITO_PAGES` (hard cap; the previous
+    unbounded loop would hang the Lambda on a pagination-token bug). The
+    per-user group lookup is N+1 — Cognito has no batch API — so we fan out
+    with a ThreadPoolExecutor. See audit items 16 and 17.
+    """
+    try:
+        users: list[dict] = []
+        pagination_token = None
+        pages_fetched = 0
+
+        while pages_fetched < _MAX_COGNITO_PAGES:
+            params: dict[str, Any] = {
                 'UserPoolId': USER_POOL_ID,
-                'Limit': 60  # Max allowed by Cognito
+                'Limit': 60,  # Max allowed by Cognito
             }
             if pagination_token:
                 params['PaginationToken'] = pagination_token
 
             response = cognito_client.list_users(**params)
             users.extend([format_user(u) for u in response.get('Users', [])])
-
             pagination_token = response.get('PaginationToken')
+            pages_fetched += 1
+
             if not pagination_token:
                 break
 
-        # Get groups for each user
-        for user in users:
-            try:
-                groups_response = cognito_client.admin_list_groups_for_user(
-                    Username=user['username'],
-                    UserPoolId=USER_POOL_ID
-                )
-                user['groups'] = [g['GroupName'] for g in groups_response.get('Groups', [])]
-            except ClientError:
-                user['groups'] = []
+        truncated = pagination_token is not None
+        if truncated:
+            logger.warning(
+                "Cognito list_users hit the %d-page cap; returning %d users.",
+                _MAX_COGNITO_PAGES, len(users),
+            )
 
-        # Apply offset/limit pagination
+        # Parallel group lookup. Cognito has no batch API so we fan out —
+        # the previous serial loop was 50ms x N seconds linear.
+        if users:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=_GROUPS_FANOUT) as pool:
+                results = pool.map(
+                    _fetch_user_groups, [u['username'] for u in users]
+                )
+                for user, groups in zip(users, results, strict=False):
+                    user['groups'] = groups
+
+        # Apply offset/limit pagination against the fetched page set.
         total = len(users)
         paginated = users[offset:offset + limit]
 
@@ -84,7 +120,8 @@ def handle_list_users(event: dict, context: Any, limit: int, offset: int, **kwar
             'total': total,
             'limit': limit,
             'offset': offset,
-            'has_more': offset + limit < total
+            'has_more': offset + limit < total,
+            'truncated': truncated,
         }, event)
 
     except ClientError as e:

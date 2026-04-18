@@ -20,6 +20,7 @@ sys.path.insert(0, '/opt/python')
 from shared.api_response import success_response, validation_error
 from shared.decorators import api_handler, cors_preflight, parse_json_body, route_handler, validate
 from shared.llm_json import parse_llm_json
+from shared.prompt_safety import untrusted_input_system_instruction, wrap_user_input
 from shared.utils import get_timestamp
 
 logger = logging.getLogger(__name__)
@@ -246,7 +247,9 @@ def expand_brands(existing_brands: list, industry: str = "hotels", brand_type: s
     entity_types = industry_preset.get("entity_types", ["brands", "companies"])
 
     entity_types_str = ", ".join(entity_types) if entity_types else "brands and companies"
-    brands_list = ", ".join(existing_brands)
+    # Wrap each user-supplied brand in `<brand>` tags so malicious names
+    # cannot escape into the surrounding prompt instructions.
+    brands_list = ", ".join(wrap_user_input(b, "brand") for b in existing_brands if b)
 
     # Check for existing duplicates first
     existing_duplicates = find_duplicates(existing_brands)
@@ -254,7 +257,9 @@ def expand_brands(existing_brands: list, industry: str = "hotels", brand_type: s
     # Normalize existing brands for filtering
     existing_normalized = {normalize_brand(b) for b in existing_brands}
 
-    prompt = f"""You are a brand expert for the {industry_name} industry.
+    prompt = f"""{untrusted_input_system_instruction()}
+
+You are a brand expert for the {industry_name} industry.
 
 INDUSTRY CONTEXT:
 - Entity types: {entity_types_str}
@@ -357,10 +362,16 @@ def expand_brand(brand_name: str, industry: str = "hotels", existing_brands: lis
     entity_types_str = ", ".join(entity_types) if entity_types else "brands and companies"
     examples_str = ", ".join(example_brands[:5]) if example_brands else "major brands in this industry"
 
-    # Build exclusion list for the prompt
-    exclude_str = ", ".join(existing_brands) if existing_brands else "none"
+    # Wrap user-supplied brand names so a malicious entry cannot escape the prompt.
+    exclude_str = (
+        ", ".join(wrap_user_input(b, "brand") for b in existing_brands if b)
+        if existing_brands else "none"
+    )
+    brand_name_wrapped = wrap_user_input(brand_name, "brand")
 
-    prompt = f"""You are a brand expert for the {industry_name} industry.
+    prompt = f"""{untrusted_input_system_instruction()}
+
+You are a brand expert for the {industry_name} industry.
 
 INDUSTRY CONTEXT:
 - Entity types: {entity_types_str}
@@ -368,7 +379,7 @@ INDUSTRY CONTEXT:
 
 ALREADY TRACKED (do NOT suggest these): {exclude_str}
 
-Given the brand name "{brand_name}", list ALL related brand names that should be tracked together.
+Given the brand name {brand_name_wrapped}, list ALL related brand names that should be tracked together.
 
 Include:
 1. Sub-brands and brand tiers owned by this company
@@ -446,15 +457,21 @@ def find_competitors(first_party_brands: list, industry: str = "hotels", existin
     entity_types = industry_preset.get("entity_types", ["brands", "companies"])
     example_brands = industry_preset.get("example_brands", [])
 
-    brands_list = ", ".join(first_party_brands)
+    # Wrap user-supplied brand names to neutralize injection attempts.
+    brands_list = ", ".join(wrap_user_input(b, "brand") for b in first_party_brands if b)
     entity_types_str = ", ".join(entity_types) if entity_types else "brands and companies"
     examples_str = ", ".join(example_brands[:5]) if example_brands else "major brands in this industry"
 
     # Build exclusion list
     exclude_brands = first_party_brands + existing_competitors
-    exclude_str = ", ".join(exclude_brands) if exclude_brands else "none"
+    exclude_str = (
+        ", ".join(wrap_user_input(b, "brand") for b in exclude_brands if b)
+        if exclude_brands else "none"
+    )
 
-    prompt = f"""You are a competitive intelligence expert for the {industry_name} industry.
+    prompt = f"""{untrusted_input_system_instruction()}
+
+You are a competitive intelligence expert for the {industry_name} industry.
 
 INDUSTRY CONTEXT:
 - Entity types: {entity_types_str}

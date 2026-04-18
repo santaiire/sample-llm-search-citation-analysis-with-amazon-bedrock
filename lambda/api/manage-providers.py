@@ -212,9 +212,28 @@ def validate_api_key(provider_id: str, api_key: str) -> dict:
             return {'valid': False, 'error': 'Invalid API key'}
 
         elif provider_id == 'perplexity':
-            if api_key.startswith('pplx-') and len(api_key) > 10:
-                return {'valid': True, 'note': 'Format looks correct'}
-            return {'valid': False, 'error': 'Key should start with pplx-'}
+            # Perplexity has no cheap list endpoint, but /chat/completions
+            # returns 401 for bad keys immediately on a 1-token request.
+            # Cost: 1 input token + 1 output token if the key IS valid, so
+            # ≤ $0.001 per validation.
+            response = requests.post(
+                'https://api.perplexity.ai/chat/completions',
+                headers={
+                    'Authorization': f'Bearer {api_key}',
+                    'Content-Type': 'application/json',
+                },
+                json={
+                    'model': 'sonar',
+                    'messages': [{'role': 'user', 'content': 'ping'}],
+                    'max_tokens': 1,
+                },
+                timeout=10,
+            )
+            if response.status_code == 200:
+                return {'valid': True}
+            if response.status_code in (401, 403):
+                return {'valid': False, 'error': 'Invalid API key'}
+            return {'valid': False, 'error': f'Unexpected status {response.status_code}'}
 
         elif provider_id == 'gemini':
             response = requests.get(
@@ -233,9 +252,36 @@ def validate_api_key(provider_id: str, api_key: str) -> dict:
             return {'valid': False, 'error': 'Invalid API key'}
 
         elif provider_id == 'claude':
-            if api_key.startswith('sk-ant-') and len(api_key) > 10:
-                return {'valid': True, 'note': 'Format looks correct'}
-            return {'valid': False, 'error': 'Key should start with sk-ant-'}
+            # Anthropic /v1/messages returns 401 immediately on a bad key
+            # without consuming meaningful quota for a 1-token request.
+            response = requests.post(
+                'https://api.anthropic.com/v1/messages',
+                headers={
+                    'x-api-key': api_key,
+                    'anthropic-version': '2023-06-01',
+                    'content-type': 'application/json',
+                },
+                json={
+                    'model': 'claude-haiku-4-5',
+                    'max_tokens': 1,
+                    'messages': [{'role': 'user', 'content': 'ping'}],
+                },
+                timeout=10,
+            )
+            if response.status_code == 200:
+                return {'valid': True}
+            if response.status_code in (401, 403):
+                return {'valid': False, 'error': 'Invalid API key'}
+            # 400 on bad model but valid key — still proves auth passed.
+            if response.status_code == 400:
+                try:
+                    err = response.json().get('error', {})
+                    if err.get('type') == 'authentication_error':
+                        return {'valid': False, 'error': 'Invalid API key'}
+                    return {'valid': True, 'note': 'Key accepted (model validation skipped)'}
+                except Exception:
+                    return {'valid': False, 'error': 'Unexpected 400 response'}
+            return {'valid': False, 'error': f'Unexpected status {response.status_code}'}
 
         # Search providers validation
         elif provider_id == 'brave':
@@ -281,9 +327,22 @@ def validate_api_key(provider_id: str, api_key: str) -> dict:
             return {'valid': False, 'error': 'Invalid API key'}
 
         elif provider_id == 'firecrawl':
-            if len(api_key) > 10:
-                return {'valid': True, 'note': 'Format looks correct'}
-            return {'valid': False, 'error': 'Key appears too short'}
+            # Firecrawl's /v1/search endpoint returns 401 for bad keys on
+            # any request. limit=1 keeps credits usage minimal.
+            response = requests.post(
+                'https://api.firecrawl.dev/v1/search',
+                headers={
+                    'Authorization': f'Bearer {api_key}',
+                    'Content-Type': 'application/json',
+                },
+                json={'query': 'ping', 'limit': 1},
+                timeout=10,
+            )
+            if response.status_code == 200:
+                return {'valid': True}
+            if response.status_code in (401, 403):
+                return {'valid': False, 'error': 'Invalid API key'}
+            return {'valid': False, 'error': f'Unexpected status {response.status_code}'}
 
         return {'valid': False, 'error': 'Unknown provider'}
     except requests.Timeout:

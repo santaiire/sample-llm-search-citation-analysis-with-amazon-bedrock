@@ -17,6 +17,7 @@ from shared.browser_tools import SimpleBrowserTools
 from shared.config import LambdaConfig
 from shared.llm_json import parse_llm_json
 from shared.models import ModelRole, invoke_bedrock
+from shared.prompt_safety import untrusted_input_system_instruction, wrap_user_input
 from shared.step_function_response import log_error
 
 # Configure logging
@@ -54,15 +55,27 @@ def analyze_content_combined(content: str, title: str, url: str, keyword: str) -
         max_content_length = 8000
         truncated_content = content[:max_content_length] if len(content) > max_content_length else content
 
-        # Combined prompt for both summary and SEO analysis
-        prompt = f"""Analyze this web page and provide both a summary and SEO analysis.
+        # Wrap all untrusted inputs. Title and content came from scraped web
+        # pages; keyword and URL were ultimately user-supplied. A malicious
+        # page could attempt to exfiltrate prompt instructions through its
+        # own markup — the tagged boundary plus the system preamble neutralize
+        # that.
+        url_tag = wrap_user_input(url, "url", max_length=2048)
+        title_tag = wrap_user_input(title, "title")
+        keyword_tag = wrap_user_input(keyword, "keyword")
+        content_tag = wrap_user_input(truncated_content, "page_content", max_length=max_content_length + 200)
 
-URL: {url}
-Title: {title}
-Search Keyword: "{keyword}"
+        # Combined prompt for both summary and SEO analysis
+        prompt = f"""{untrusted_input_system_instruction()}
+
+Analyze this web page and provide both a summary and SEO analysis.
+
+URL: {url_tag}
+Title: {title_tag}
+Search Keyword: {keyword_tag}
 
 Content:
-{truncated_content}
+{content_tag}
 
 Please provide:
 1. A concise 2-3 sentence summary of the page
@@ -158,9 +171,40 @@ def upload_screenshot_to_s3(screenshot_base64: str, url: str, timestamp: str) ->
         return ""
 
 
+def _load_block_patterns() -> dict[str, list[str]]:
+    """Load the bot-detection pattern dictionary from `block_patterns.json`.
+
+    Cached at module import so there's one disk read per Lambda cold start.
+    See audit item 14 — these used to be 40+ hardcoded strings; extracting
+    them lets operators tune detection without a redeploy.
+    """
+    patterns_path = os.path.join(os.path.dirname(__file__), 'block_patterns.json')
+    try:
+        with open(patterns_path, encoding='utf-8') as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError) as e:
+        logger.error("Failed to load block_patterns.json: %s", e)
+        return {}
+    # Defensive validation — drop anything that isn't list[str].
+    return {
+        reason: [s for s in patterns if isinstance(s, str)]
+        for reason, patterns in data.items()
+        if isinstance(patterns, list)
+    }
+
+
+_BLOCK_PATTERNS = _load_block_patterns()
+
+
 def detect_blocked_page(content: str, title: str) -> tuple[bool, str | None]:
     """
     Detect if page is a bot detection/CAPTCHA page.
+
+    Pattern lists live in ``block_patterns.json``. Iteration order matches
+    the JSON keys (Python dicts preserve insertion order), which
+    determines which reason wins when a page matches multiple categories.
+    Current ordering: captcha > access_denied > rate_limited > geo_blocked
+    > login_required.
 
     Args:
         content: Page content text
@@ -177,84 +221,10 @@ def detect_blocked_page(content: str, title: str) -> tuple[bool, str | None]:
 
     combined_text = (content + ' ' + title).lower()
 
-    # CAPTCHA indicators (these should only match if slider handling failed)
-    captcha_indicators = [
-        'captcha',
-        'verify you are human',
-        'verification required',
-        'prove you are not a robot',
-        'security check',
-        'challenge-platform',
-        'recaptcha',
-        'hcaptcha',
-        'slider verification',
-        'slide right to secure',
-        'slide to verify',
-        'unusual activity',
-        'automated (bot) activity',
-        'we detected unusual activity',
-    ]
-
-    # Access denied indicators
-    access_denied_indicators = [
-        'access denied',
-        '403 forbidden',
-        'you have been blocked',
-        'request blocked',
-        'access to this page has been denied',
-        'your access has been blocked',
-    ]
-
-    # Rate limiting indicators
-    rate_limit_indicators = [
-        'too many requests',
-        'rate limit',
-        'slow down',
-        'try again later',
-        'request limit exceeded',
-        '429',
-    ]
-
-    # Geo-blocking indicators
-    geo_block_indicators = [
-        'not available in your region',
-        'not available in your country',
-        'geo-restricted',
-        'content not available',
-        'this content is not available in your location',
-    ]
-
-    # Login required indicators
-    login_indicators = [
-        'please log in',
-        'please sign in',
-        'login required',
-        'sign in to continue',
-        'create an account',
-        'members only',
-        'subscription required',
-    ]
-
-    # Check each category
-    for indicator in captcha_indicators:
-        if indicator in combined_text:
-            return True, 'captcha'
-
-    for indicator in access_denied_indicators:
-        if indicator in combined_text:
-            return True, 'access_denied'
-
-    for indicator in rate_limit_indicators:
-        if indicator in combined_text:
-            return True, 'rate_limited'
-
-    for indicator in geo_block_indicators:
-        if indicator in combined_text:
-            return True, 'geo_blocked'
-
-    for indicator in login_indicators:
-        if indicator in combined_text:
-            return True, 'login_required'
+    for reason, indicators in _BLOCK_PATTERNS.items():
+        for indicator in indicators:
+            if indicator in combined_text:
+                return True, reason
 
     return False, None
 

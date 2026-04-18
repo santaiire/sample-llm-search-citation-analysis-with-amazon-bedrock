@@ -55,34 +55,52 @@ def extract_domain(url: str) -> str:
 
 def is_first_party_domain(domain: str, config: dict[str, Any]) -> bool:
     """
-    Check if a domain belongs to a first-party brand.
-    This prevents showing your own URLs as citation gaps.
+    Check whether `domain` belongs to a first-party brand.
 
-    Uses two methods:
-    1. Explicit domains from config (preferred) - e.g., ["example.com", "brand.com"]
-    2. Fallback: string matching against brand names
+    Uses ONLY the explicit `first_party_domains` allow-list from brand config.
+    Match rules, in order of specificity:
+
+    1. Exact match on the registered hostname (`example.com` == `example.com`)
+    2. Subdomain match (`blog.example.com` ends with `.example.com`)
+
+    The previous implementation also fell back to substring matching against
+    tracked brand names ("Inn" matching both "Holiday Inn" and "linkedin.com"),
+    which produced false positives that silently flipped competitor URLs into
+    the first-party bucket. That fallback is removed — if a deployment wants
+    a domain treated as first-party, it must be in the config.
+
+    Args:
+        domain: Hostname to test (may be lowercase or mixed case; leading
+            `www.` is tolerated).
+        config: Brand config dict. Only `first_party_domains` is read.
+
+    Returns:
+        True if the domain matches the allow-list exactly or as a subdomain.
     """
-    domain_lower = domain.lower()
+    if not domain or not isinstance(domain, str):
+        return False
 
-    # Method 1: Check explicit first-party domains from config
-    first_party_domains = config.get('first_party_domains', [])
-    for fp_domain in first_party_domains:
-        fp_domain_lower = fp_domain.lower().replace('www.', '')
-        if fp_domain_lower in domain_lower or domain_lower in fp_domain_lower:
+    # Normalize both sides: lowercase and strip leading www.
+    domain_lower = domain.lower().lstrip('.')
+    if domain_lower.startswith('www.'):
+        domain_lower = domain_lower[4:]
+
+    first_party_domains = config.get('first_party_domains', []) or []
+    for fp in first_party_domains:
+        if not fp or not isinstance(fp, str):
+            continue
+        fp_norm = fp.lower().lstrip('.')
+        if fp_norm.startswith('www.'):
+            fp_norm = fp_norm[4:]
+        if not fp_norm:
+            continue
+
+        # Exact host match.
+        if domain_lower == fp_norm:
             return True
-
-    # Method 2: Fallback - check if brand name appears in domain
-    tracked_brands = config.get('tracked_brands', {})
-    first_party_brands = tracked_brands.get('first_party', [])
-
-    for brand in first_party_brands:
-        brand_lower = brand.lower().replace(' ', '')
-        # Check if brand name is in the domain
-        if brand_lower in domain_lower:
-            return True
-        # Check common variations (e.g., "brand" matches "brand.com")
-        brand_parts = brand_lower.split()
-        if any(part in domain_lower for part in brand_parts if len(part) > 3):
+        # Subdomain match — require the '.' boundary so 'evilexample.com'
+        # does NOT match 'example.com'.
+        if domain_lower.endswith('.' + fp_norm):
             return True
 
     return False

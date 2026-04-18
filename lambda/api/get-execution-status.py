@@ -72,8 +72,15 @@ def handler(event: dict[str, Any], context: Any, id: str | None = None, stateMac
     current_state_by_event_id = {}
     events = []
 
+    all_events = history.get('events', [])
+
+    # Build an event_id → event dict ONCE so find_state_name is O(depth)
+    # per lookup instead of O(n) — the whole pass was O(n²) before this.
+    # See audit item 15.
+    events_by_id = {e['id']: e for e in all_events}
+
     # First pass: build state mapping from TaskStateEntered events
-    for evt in history.get('events', []):
+    for evt in all_events:
         if evt['type'] == 'TaskStateEntered':
             details = evt.get('stateEnteredEventDetails', {})
             state_name = details.get('name', '')
@@ -86,17 +93,17 @@ def handler(event: dict[str, Any], context: Any, id: str | None = None, stateMac
             return None
         if event_id in current_state_by_event_id:
             return current_state_by_event_id[event_id]
-        # Look for the event with this ID
-        for e in history.get('events', []):
-            if e['id'] == event_id:
-                return find_state_name(e.get('previousEventId'), depth + 1)
-        return None
+        # O(1) lookup via events_by_id; recurse up the previousEventId chain.
+        parent = events_by_id.get(event_id)
+        if parent is None:
+            return None
+        return find_state_name(parent.get('previousEventId'), depth + 1)
 
     # Track seen messages to avoid duplicates
     seen_messages = set()
 
     # Second pass: process all events
-    for evt in history.get('events', []):
+    for evt in all_events:
         event_type = evt['type']
         timestamp = evt['timestamp'].isoformat()
         previous_event_id = evt.get('previousEventId')

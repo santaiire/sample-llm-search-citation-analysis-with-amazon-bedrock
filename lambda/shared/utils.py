@@ -136,3 +136,31 @@ def extract_domain(url: str) -> str:
         return parsed.netloc
     except Exception:
         return "unknown"
+
+
+def brand_names_match(candidate: str, tracked: str) -> bool:
+    """Safely test whether two brand names refer to the same brand.
+
+    Designed as a fallback for classification logic when a brand extraction
+    record is missing the authoritative `classification` field. Uses
+    normalized exact matching — NOT substring matching — so `"Inn"` does
+    not match `"Holiday Inn"` or `"linkedin.com"`.
+
+    Normalization:
+    - Lowercase
+    - Strip leading/trailing whitespace
+    - Collapse internal whitespace runs into a single space
+
+    Returns False for any non-string input.
+    """
+    if not isinstance(candidate, str) or not isinstance(tracked, str):
+        return False
+
+    def _norm(s: str) -> str:
+        return " ".join(s.lower().split())
+
+    c = _norm(candidate)
+    t = _norm(tracked)
+    if not c or not t:
+        return False
+    return c == t

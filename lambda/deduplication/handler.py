@@ -112,6 +112,14 @@ def store_citations(keyword: str, citations: list[dict[str, Any]]) -> None:
     """
     Store deduplicated citations in DynamoDB.
 
+    Uses a single atomic ``update_item`` per citation with
+    ``first_seen = if_not_exists(first_seen, :t)`` so concurrent runs for the
+    same keyword don't race. Previous implementation did a put-with-condition
+    then fell back to a second update on conflict; two overlapping executions
+    could both hit the put, one fails the condition, and the fallback update
+    from the slower run overwrote the faster run's `priority` field
+    (last-writer-wins). See audit item 21.
+
     Args:
         keyword: Search keyword
         citations: List of prioritized citations
@@ -120,50 +128,36 @@ def store_citations(keyword: str, citations: list[dict[str, Any]]) -> None:
 
     for citation in citations:
         try:
-            item = {
-                'keyword': keyword,
-                'normalized_url': citation['normalized_url'],
-                'original_urls': citation['original_urls'],
-                'citation_count': citation['citation_count'],
-                'citing_providers': citation['citing_providers'],
-                'priority': citation['priority'],
-                'first_seen': timestamp,
-                'last_updated': timestamp
-            }
-
-            # Use update_item with conditional expression to preserve first_seen
-            citations_table.put_item(
-                Item=item,
-                ConditionExpression='attribute_not_exists(keyword) AND attribute_not_exists(normalized_url)'
+            citations_table.update_item(
+                Key={
+                    'keyword': keyword,
+                    'normalized_url': citation['normalized_url'],
+                },
+                UpdateExpression=(
+                    'SET original_urls = :urls, '
+                    'citation_count = :count, '
+                    'citing_providers = :providers, '
+                    'priority = :priority, '
+                    'last_updated = :updated, '
+                    'first_seen = if_not_exists(first_seen, :updated)'
+                ),
+                ExpressionAttributeValues={
+                    ':urls': citation['original_urls'],
+                    ':count': citation['citation_count'],
+                    ':providers': citation['citing_providers'],
+                    ':priority': citation['priority'],
+                    ':updated': timestamp,
+                },
             )
-
-            logger.info(f"Stored citation: {citation['normalized_url']} (priority {citation['priority']})")
-
-        except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
-            # Citation already exists, update it
-            try:
-                citations_table.update_item(
-                    Key={
-                        'keyword': keyword,
-                        'normalized_url': citation['normalized_url']
-                    },
-                    UpdateExpression='SET original_urls = :urls, citation_count = :count, '
-                                   'citing_providers = :providers, priority = :priority, '
-                                   'last_updated = :updated',
-                    ExpressionAttributeValues={
-                        ':urls': citation['original_urls'],
-                        ':count': citation['citation_count'],
-                        ':providers': citation['citing_providers'],
-                        ':priority': citation['priority'],
-                        ':updated': timestamp
-                    }
-                )
-                logger.info(f"Updated existing citation: {citation['normalized_url']}")
-            except Exception as e:
-                logger.error(f"Error updating citation {citation['normalized_url']}: {e}")
-
+            logger.info(
+                "Stored citation: %s (priority %s)",
+                citation['normalized_url'], citation['priority'],
+            )
         except Exception as e:
-            logger.error(f"Error storing citation {citation['normalized_url']}: {e}")
+            logger.error(
+                "Error storing citation %s: %s",
+                citation['normalized_url'], e,
+            )
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:

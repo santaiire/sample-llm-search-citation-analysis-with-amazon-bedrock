@@ -33,6 +33,7 @@ from functools import wraps
 from typing import Any
 
 from shared.api_response import error_response, validation_error
+from shared.router import path_contains_segment
 
 logger = logging.getLogger(__name__)
 
@@ -311,11 +312,19 @@ def route_handler(routes: dict[str, Callable]) -> Callable:
             method = event.get('httpMethod', 'GET').upper()
             path = event.get('path', '')
 
-            # First try path-specific routes (tuple keys)
+            # First try path-specific routes (tuple keys). Match semantics:
+            #   - None → method-only match (used for fallbacks like DELETE
+            #     on a parametric path)
+            #   - Otherwise, require a segment-exact occurrence of
+            #     route_path in the request path. See
+            #     `shared.router.path_contains_segment` for the boundary
+            #     contract and audit item 26.
             for route_key, handler_func in routes.items():
                 if isinstance(route_key, tuple):
                     route_method, route_path = route_key
-                    if method == route_method.upper() and (route_path is None or route_path in path):
+                    if method == route_method.upper() and (
+                        route_path is None or path_contains_segment(route_path, path)
+                    ):
                         return handler_func(event, context, **kwargs)
 
             # Then try method-only routes (string keys)

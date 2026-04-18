@@ -27,6 +27,7 @@ from search_clients import BraveSearchClient, ExaSearchClient, FirecrawlSearchCl
 
 # Import centralized provider constants and error handling
 from shared.config import Provider
+from shared.prompt_safety import sanitize_user_input
 from shared.step_function_response import log_error
 
 # Configure logging
@@ -807,14 +808,25 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     try:
         # Extract keyword and timestamp
-        keyword = event.get('keyword')
+        keyword_raw = event.get('keyword')
         timestamp = event.get('timestamp', get_timestamp())
         provider_types = event.get('provider_types')  # Optional: ["llm"], ["search"], or ["llm", "search"]
         providers = event.get('providers')  # Optional: specific provider IDs
         query_prompts = event.get('query_prompts', [])
 
-        if not keyword:
+        if not keyword_raw:
             error = ValueError("Missing required field: keyword")
+            log_error(error, "search handler", event)
+            raise error
+
+        # Sanitize the keyword before it lands in any provider query string.
+        # Keywords are dashboard-editable (see api/manage-keywords) so treated
+        # as untrusted input. The brand extractor downstream wraps the full
+        # provider response in <response_text> tags — this is defense in depth
+        # so a crafted keyword can't poison the query itself.
+        keyword = sanitize_user_input(keyword_raw, max_length=500)
+        if not keyword:
+            error = ValueError("Keyword is empty after sanitization")
             log_error(error, "search handler", event)
             raise error
 
