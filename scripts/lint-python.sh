@@ -11,6 +11,9 @@
 # Requires: ruff and vulture on PATH. Install once with:
 #   pipx install ruff
 #   pipx install vulture
+#
+# For running the test suite (pytest, boto3, hypothesis), see
+# lambda/requirements-dev.txt.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
