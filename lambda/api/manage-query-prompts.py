@@ -16,6 +16,7 @@ import boto3
 sys.path.insert(0, '/opt/python')
 
 from shared.api_response import success_response, validation_error
+from shared.constants import MAX_QUERY_PROMPTS_DEFAULT
 from shared.decorators import api_handler, parse_json_body, validate
 from shared.utils import get_timestamp
 
@@ -28,7 +29,11 @@ dynamodb = boto3.resource('dynamodb')
 QUERY_PROMPTS_TABLE = os.environ['QUERY_PROMPTS_TABLE']
 query_prompts_table = dynamodb.Table(QUERY_PROMPTS_TABLE)
 
-MAX_PROMPTS = 10
+# Soft business cap — bounded per-user prompts. Override with
+# `MAX_QUERY_PROMPTS` env var at deploy time. Must be <= the scan Limit in
+# `list_prompts` below; bumping this without also raising the scan limit
+# would silently truncate the UI.
+MAX_PROMPTS = int(os.environ.get('MAX_QUERY_PROMPTS', MAX_QUERY_PROMPTS_DEFAULT))
 
 
 @api_handler
@@ -60,7 +65,10 @@ def handler(event, context):
 
 def list_prompts(event, context):
     """GET /api/query-prompts - List all query prompts."""
-    response = query_prompts_table.scan(Limit=50)
+    # Scan with headroom over MAX_PROMPTS so tuning the cap upward doesn't
+    # silently truncate the UI. 5x buffer is arbitrary but comfortable for
+    # the business-soft-cap scale.
+    response = query_prompts_table.scan(Limit=max(50, MAX_PROMPTS * 5))
     items = response.get('Items', [])
     # Sort by created_at descending
     items.sort(key=lambda x: x.get('created_at', ''), reverse=True)

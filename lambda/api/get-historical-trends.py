@@ -28,6 +28,17 @@ from decimal_utils import to_int
 sys.path.insert(0, '/opt/python')
 
 from shared.api_response import success_response
+from shared.constants import (
+    TREND_DIRECTION_DECLINING_SLOPE,
+    TREND_DIRECTION_IMPROVING_SLOPE,
+    UNRANKED_SENTINEL,
+    VISIBILITY_MENTION_LOG_BASE,
+    VISIBILITY_MENTION_WEIGHT,
+    VISIBILITY_PROVIDER_WEIGHT,
+    VISIBILITY_RANK_CAP,
+    VISIBILITY_RANK_INVERSE_BASE,
+    VISIBILITY_RANK_WEIGHT,
+)
 from shared.decorators import api_handler, validate
 from shared.providers import get_enabled_provider_count
 from shared.utils import brand_names_match, get_brand_config, utc_now
@@ -48,18 +59,37 @@ KEYWORDS_TABLE = os.environ.get('DYNAMODB_TABLE_KEYWORDS')  # Optional for fallb
 
 
 def calculate_visibility_score(provider_count: int, total_mentions: int, best_rank: int, total_providers: int | None = None) -> float:
-    """Calculate visibility score (0-100)."""
+    """Calculate visibility score (0-100).
+
+    This variant is sentiment-agnostic (historical-trends doesn't carry
+    per-period sentiment aggregation); the sentiment weight is folded
+    into the other three weights proportionally:
+        provider: 40, rank: 30, mentions: 20, total = 90 (out of 100).
+    See `get-visibility-metrics.py::calculate_visibility_score` for the
+    full 4-factor version. Constants are shared in `shared.constants`.
+    """
     import math
     if total_providers is None:
         total_providers = get_enabled_provider_count()
-    provider_score = (provider_count / total_providers) * 40 if total_providers > 0 else 0
-    rank_score = max(0, (11 - min(best_rank, 10)) / 10) * 30
-    mention_score = min(math.log(total_mentions + 1) / math.log(51), 1) * 20
+    provider_score = (
+        (provider_count / total_providers) * VISIBILITY_PROVIDER_WEIGHT
+        if total_providers > 0 else 0
+    )
+    capped_rank = min(best_rank, VISIBILITY_RANK_CAP)
+    rank_score = max(0, (VISIBILITY_RANK_INVERSE_BASE - capped_rank) / VISIBILITY_RANK_CAP) * VISIBILITY_RANK_WEIGHT
+    mention_score = (
+        min(math.log(total_mentions + 1) / math.log(VISIBILITY_MENTION_LOG_BASE), 1)
+        * VISIBILITY_MENTION_WEIGHT
+    )
     return round(provider_score + rank_score + mention_score, 1)
 
 
 def get_trend_direction(values: list[float]) -> str:
-    """Determine trend direction from a series of values."""
+    """Determine trend direction from a series of values.
+
+    Slope thresholds are tuned for the 0-100 visibility range. See
+    `shared.constants.TREND_DIRECTION_{IMPROVING,DECLINING}_SLOPE`.
+    """
     if len(values) < 2:
         return 'stable'
 
@@ -76,10 +106,9 @@ def get_trend_direction(values: list[float]) -> str:
 
     slope = numerator / denominator
 
-    # Determine direction based on slope magnitude
-    if slope > 2:
+    if slope > TREND_DIRECTION_IMPROVING_SLOPE:
         return 'improving'
-    elif slope < -2:
+    elif slope < TREND_DIRECTION_DECLINING_SLOPE:
         return 'declining'
     return 'stable'
 
@@ -131,7 +160,7 @@ def aggregate_by_period(items: list[dict], period: str, config: dict) -> list[di
         # Aggregate first-party brand metrics
         fp_mentions = 0
         fp_providers = set()
-        fp_best_rank = 999
+        fp_best_rank = UNRANKED_SENTINEL
         total_searches = len(timestamps)
 
         for item in items_in_period:
@@ -150,7 +179,7 @@ def aggregate_by_period(items: list[dict], period: str, config: dict) -> list[di
                 if is_first_party:
                     fp_mentions += to_int(brand.get('mention_count'), 1)
                     fp_providers.add(provider)
-                    fp_best_rank = min(fp_best_rank, to_int(brand.get('rank'), 999))
+                    fp_best_rank = min(fp_best_rank, to_int(brand.get('rank'), UNRANKED_SENTINEL))
 
         visibility_score = calculate_visibility_score(
             len(fp_providers), fp_mentions, fp_best_rank
@@ -161,7 +190,7 @@ def aggregate_by_period(items: list[dict], period: str, config: dict) -> list[di
             'visibility_score': visibility_score,
             'total_mentions': fp_mentions,
             'provider_count': len(fp_providers),
-            'best_rank': fp_best_rank if fp_best_rank < 999 else None,
+            'best_rank': fp_best_rank if fp_best_rank < UNRANKED_SENTINEL else None,
             'analysis_runs': total_searches
         })
 
