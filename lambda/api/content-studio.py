@@ -19,7 +19,6 @@ import uuid
 from collections import defaultdict
 from datetime import datetime
 from typing import Any
-from urllib.parse import urlparse
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -32,7 +31,7 @@ from shared.api_response import api_response, success_response, validation_error
 from shared.decorators import api_handler, parse_json_body, route_handler, validate
 from shared.models import BedrockInvocationError, ModelRole, get_model_tier, invoke_bedrock
 from shared.prompt_safety import untrusted_input_system_instruction, wrap_user_input
-from shared.utils import brand_names_match, get_brand_config, get_timestamp, utc_now
+from shared.utils import brand_names_match, extract_domain, get_brand_config, get_timestamp, utc_now
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -46,18 +45,6 @@ CRAWLED_CONTENT_TABLE = os.environ['DYNAMODB_TABLE_CRAWLED_CONTENT']
 CONTENT_STUDIO_TABLE = os.environ['DYNAMODB_TABLE_CONTENT_STUDIO']
 KEYWORDS_TABLE = os.environ.get('DYNAMODB_TABLE_KEYWORDS')  # Optional for fallback
 GENERATION_TIMEOUT_SECONDS = int(os.environ.get('GENERATION_TIMEOUT_SECONDS', '240'))
-
-
-def extract_domain(url: str) -> str:
-    """Extract domain from URL."""
-    try:
-        parsed = urlparse(url)
-        domain = parsed.netloc.lower()
-        if domain.startswith('www.'):
-            domain = domain[4:]
-        return domain
-    except Exception:
-        return url
 
 
 def _get_seasonal_suggestions(keywords: list[str], config: dict[str, Any]) -> list[dict[str, Any]]:

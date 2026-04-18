@@ -16,7 +16,6 @@ import os
 import sys
 from collections import defaultdict
 from typing import Any
-from urllib.parse import urlparse
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -26,7 +25,7 @@ sys.path.insert(0, '/opt/python')
 
 from shared.api_response import success_response
 from shared.decorators import api_handler, validate
-from shared.utils import get_brand_config
+from shared.utils import extract_domain, get_brand_config
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -38,19 +37,6 @@ SEARCH_RESULTS_TABLE = os.environ['DYNAMODB_TABLE_SEARCH_RESULTS']
 CITATIONS_TABLE = os.environ['DYNAMODB_TABLE_CITATIONS']
 CRAWLED_CONTENT_TABLE = os.environ['DYNAMODB_TABLE_CRAWLED_CONTENT']
 KEYWORDS_TABLE = os.environ.get('DYNAMODB_TABLE_KEYWORDS')  # Optional for fallback
-
-
-def extract_domain(url: str) -> str:
-    """Extract domain from URL."""
-    try:
-        parsed = urlparse(url)
-        domain = parsed.netloc.lower()
-        # Remove www prefix
-        if domain.startswith('www.'):
-            domain = domain[4:]
-        return domain
-    except Exception:
-        return url
 
 
 def is_first_party_domain(domain: str, config: dict[str, Any]) -> bool:

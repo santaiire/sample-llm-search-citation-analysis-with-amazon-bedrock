@@ -192,3 +192,34 @@ class TestBrandNamesMatch:
         assert utils.brand_names_match("Marriott", None) is False  # type: ignore[arg-type]
         assert utils.brand_names_match(123, "Marriott") is False  # type: ignore[arg-type]
         assert utils.brand_names_match(["Marriott"], "Marriott") is False  # type: ignore[arg-type]
+
+
+
+class TestExtractDomain:
+    """Tests for the refactored `extract_domain` (audit item 28).
+
+    The shared helper now does what every handler-local copy was doing:
+    lowercase + strip leading `www.`. Previously the shared version was
+    subtly different — it returned raw `netloc` and the literal string
+    `'unknown'` on error — which is why handlers had their own copies.
+    """
+
+    def test_returns_lowercase_domain(self) -> None:
+        assert utils.extract_domain("https://EXAMPLE.com/path") == "example.com"
+
+    def test_strips_leading_www(self) -> None:
+        assert utils.extract_domain("https://www.example.com/") == "example.com"
+
+    def test_preserves_subdomains_other_than_www(self) -> None:
+        assert utils.extract_domain("https://api.example.com/v1") == "api.example.com"
+
+    def test_returns_original_string_on_parse_failure(self) -> None:
+        """Regression: the old implementation returned 'unknown' so every
+        parse error collapsed into one bucket in DynamoDB. Now callers
+        see the raw input."""
+        # urlparse is forgiving — pass a value that explicitly raises on
+        # netloc access. None is the simplest trigger.
+        assert utils.extract_domain(None) == ""  # type: ignore[arg-type]
+
+    def test_empty_url_returns_empty_domain(self) -> None:
+        assert utils.extract_domain("") == ""

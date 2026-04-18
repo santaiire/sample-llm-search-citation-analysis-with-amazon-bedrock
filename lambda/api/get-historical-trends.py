@@ -27,8 +27,8 @@ from decimal_utils import to_int
 sys.path.insert(0, '/opt/python')
 
 from shared.api_response import success_response
-from shared.config import PROVIDERS
 from shared.decorators import api_handler, validate
+from shared.providers import get_enabled_provider_count
 from shared.utils import brand_names_match, get_brand_config, utc_now
 
 logger = logging.getLogger(__name__)
@@ -39,38 +39,6 @@ dynamodb = boto3.resource('dynamodb')
 # Fail-fast: Required environment variables
 SEARCH_RESULTS_TABLE = os.environ['DYNAMODB_TABLE_SEARCH_RESULTS']
 KEYWORDS_TABLE = os.environ.get('DYNAMODB_TABLE_KEYWORDS')  # Optional for fallback
-PROVIDER_CONFIG_TABLE = os.environ.get('PROVIDER_CONFIG_TABLE')  # Optional for fallback
-
-
-def get_enabled_provider_count() -> int:
-    """
-    Get the count of enabled providers from the provider config table.
-    Falls back to total known providers if table is not configured or empty.
-    """
-    if not PROVIDER_CONFIG_TABLE:
-        return len(PROVIDERS)
-
-    try:
-        table = dynamodb.Table(PROVIDER_CONFIG_TABLE)
-        response = table.scan(
-            ProjectionExpression='provider_id, enabled'
-        )
-        items = response.get('Items', [])
-
-        if not items:
-            return len(PROVIDERS)
-
-        configured_providers = {item['provider_id']: item.get('enabled', True) for item in items}
-
-        enabled_count = 0
-        for provider in PROVIDERS:
-            if configured_providers.get(provider, True):
-                enabled_count += 1
-
-        return enabled_count if enabled_count > 0 else len(PROVIDERS)
-    except Exception as e:
-        logger.warning(f"Error getting provider config: {e}")
-        return len(PROVIDERS)
 
 
 def calculate_visibility_score(provider_count: int, total_mentions: int, best_rank: int, total_providers: int | None = None) -> float:

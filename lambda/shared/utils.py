@@ -123,19 +123,36 @@ def get_timestamp_compact() -> str:
 
 def extract_domain(url: str) -> str:
     """
-    Extract domain from URL.
+    Extract a normalized domain from a URL.
+
+    Normalization:
+    - Lowercase
+    - Strip leading ``www.`` (matches the convention in every current
+      caller so downstream comparisons like
+      ``domain == first_party_domains[i]`` are predictable)
 
     Args:
         url: URL to extract domain from
 
     Returns:
-        Domain name
+        Lowercase domain without leading ``www.``. Returns an empty string
+        when ``urlparse`` finds no ``netloc`` (e.g. ``"not a url"`` or
+        ``""``) or when input is not a string. On the rare ``urlparse``
+        exception, returns ``url`` verbatim if it is a string, else ``""``.
+
+        The previous shared implementation returned the literal string
+        ``'unknown'`` on failure which silently bucketed every parse
+        error into the same domain. Callers that want a sentinel should
+        substitute one at the call site.
     """
     try:
         parsed = urlparse(url)
-        return parsed.netloc
+        domain = parsed.netloc.lower()
+        if domain.startswith('www.'):
+            domain = domain[4:]
+        return domain
     except Exception:
-        return "unknown"
+        return url if isinstance(url, str) else ""
 
 
 def brand_names_match(candidate: str, tracked: str) -> bool:
