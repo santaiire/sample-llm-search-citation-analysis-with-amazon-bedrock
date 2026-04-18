@@ -40,6 +40,11 @@ coverage/
 .nyc_output/
 .hypothesis/
 
+# Python linters
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
 # Temporary files
 *.tmp
 .deps/
@@ -53,6 +58,7 @@ KIRO_DEMO_SCRIPT.md
 SKYSCANNER_SESSION_PLAN.md
 DEPLOYMENT.md
 SECURITY_AUDIT.md
+LAMBDA_AUDIT_FINDINGS.md
 cloudformation-template.yaml
 aws_blog_citation_analysis*.md
 aws_blog_citation_analysis*.pdf

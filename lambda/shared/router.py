@@ -21,7 +21,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
-from typing import Callable, Dict
+from collections.abc import Callable
 
 
 class HandlerLoader:
@@ -41,7 +41,7 @@ class HandlerLoader:
                 relative to this file's directory.
         """
         self._dir = os.path.dirname(os.path.abspath(router_file))
-        self._cache: Dict[str, Callable] = {}
+        self._cache: dict[str, Callable] = {}
 
     def get(self, filename: str) -> Callable:
         """

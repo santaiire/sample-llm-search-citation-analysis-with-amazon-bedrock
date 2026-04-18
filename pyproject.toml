@@ -1,0 +1,95 @@
+[tool.ruff]
+# Python 3.12 is the Lambda runtime target for this project.
+target-version = "py312"
+line-length = 120
+src = ["lambda"]
+
+extend-exclude = [
+    "node_modules",
+    ".hypothesis",
+    ".pytest_cache",
+    ".ruff_cache",
+    "cdk.out",
+    "lambda/*/.deps",
+    "lambda/**/__pycache__",
+    "lambda/layer/python",        # layer build artifacts
+    "lambda/crawler-layer/python",
+]
+
+[tool.ruff.lint]
+# Curated rule set:
+#   F   — pyflakes (unused imports F401, unused local vars F841, undefined names)
+#   E   — pycodestyle errors (syntax-adjacent)
+#   W   — pycodestyle warnings
+#   I   — isort (import ordering)
+#   B   — flake8-bugbear (likely bugs)
+#   ARG — flake8-unused-arguments (dead parameters)
+#   UP  — pyupgrade (Python 3.12 modernizations)
+#   SIM — flake8-simplify (readability)
+#   RUF — ruff-specific lints
+select = ["F", "E", "W", "I", "B", "ARG", "UP", "SIM", "RUF"]
+
+ignore = [
+    "E501",    # line-too-long — handled by formatter, not this project's priority
+    "ARG002",  # unused method arg — Lambda `context` is often unused but required by signature
+    "B008",    # function call in default arg — used for `Optional[...]` helpers
+    "SIM108",  # ternary over if/else — readability preference
+    "UP007",   # `Optional[X]` vs `X | None` — Lambda layer code sticks with Optional for boto3 compat
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Handler entry points: `event` and `context` are required by AWS but often unused by routers.
+"lambda/**/handler.py"      = ["ARG001"]
+"lambda/api/**"             = ["ARG001"]
+# Tests: allow magic values, imperative fixtures, loose typing.
+"lambda/**/test_*.py"       = ["ARG001", "ARG002", "B017", "RUF012", "SIM"]
+# Layer smoke test imports symbols specifically to prove they're packaged.
+"lambda/layer/test-layer.py" = ["F401"]
+# Shared __init__.py re-exports: imports are used at module boundary, ruff can't see cross-module.
+"lambda/shared/__init__.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["shared", "api_clients", "search_clients", "brand_extractor", "decimal_utils"]
+
+# ---------------------------------------------------------------------------
+# Vulture config — dead-code finder. Complements ruff.
+# Run: vulture lambda/ --config pyproject.toml
+# ---------------------------------------------------------------------------
+[tool.vulture]
+paths = ["lambda"]
+# Vulture's `exclude` matches against file paths with substring semantics; glob
+# wildcards are not interpreted. Keep the patterns simple.
+exclude = [
+    "*/layer/python/*",
+    "*/crawler-layer/python/*",
+    "*/.deps/*",
+    "*/__pycache__/*",
+]
+# Names that look dead but are entry points, decorator targets, or framework hooks.
+ignore_names = [
+    "handler",              # Lambda entry point invoked by AWS
+    "lambda_handler",
+    "default",              # JSONEncoder.default override
+    "_api_handler",         # decorated with @route_handler; name is stable
+    "_route_handler",
+    # pytest fixtures/helpers that vulture flags as unused
+    "_clean_env",
+    "_reset_mocks",
+    "handler_module",
+    "sub_handler_dir",
+]
+ignore_decorators = [
+    "@api_handler",
+    "@route_handler",
+    "@validate",
+    "@parse_json_body",
+    "@paginate",
+    "@cors_preflight",
+    "@retry_with_backoff",
+    "@pytest.fixture",
+    "@pytest.mark.parametrize",
+]
+# 80% confidence floor — below this, vulture produces too many false positives
+# for decorator-driven and dynamically-loaded code.
+min_confidence = 80
+sort_by_size = true

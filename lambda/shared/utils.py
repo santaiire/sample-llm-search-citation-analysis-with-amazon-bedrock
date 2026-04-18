@@ -1,17 +1,23 @@
 """Utility functions for Lambda functions."""
 
-import json
 import logging
 import os
-from typing import Dict, Any, Optional
-from datetime import datetime
-from urllib.parse import urlparse, parse_qs, urlencode
+from datetime import UTC, datetime
+from typing import Any
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import boto3
 
 # Set up logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+# Wire format for ISO 8601 UTC timestamps across the system. Downstream callers
+# (DynamoDB sort keys, API clients, S3 keys) rely on the trailing 'Z' suffix,
+# so `datetime.now(UTC)` output is normalized by replacing '+00:00' with 'Z'.
+# DO NOT change this format without coordinating with every consumer.
+_UTC_SUFFIX_NATIVE = '+00:00'
+_UTC_SUFFIX_WIRE = 'Z'
 
 # DynamoDB resource (lazy initialization)
 _dynamodb = None
@@ -25,14 +31,14 @@ def _get_dynamodb():
     return _dynamodb
 
 
-def get_brand_config(table_name: str = None) -> Dict[str, Any]:
+def get_brand_config(table_name: str | None = None) -> dict[str, Any]:
     """
     Get brand tracking configuration from DynamoDB.
-    
+
     Args:
         table_name: Optional table name override. If not provided,
                    uses DYNAMODB_TABLE_BRAND_CONFIG environment variable.
-    
+
     Returns:
         Brand configuration dictionary or empty dict if not found/error.
     """
@@ -52,99 +58,76 @@ def get_brand_config(table_name: str = None) -> Dict[str, Any]:
 def normalize_url(url: str) -> str:
     """
     Normalize URL by removing tracking parameters.
-    
+
     Args:
         url: Original URL with potential tracking parameters
-        
+
     Returns:
         Normalized URL with tracking parameters removed
     """
     try:
         parsed = urlparse(url)
-        
+
         # Remove tracking parameters
         query_params = parse_qs(parsed.query)
         tracking_params = [
             'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
             'fbclid', 'gclid', 'msclkid', 'ref', 'source', '_ga', 'mc_cid', 'mc_eid'
         ]
-        clean_params = {k: v for k, v in query_params.items() 
+        clean_params = {k: v for k, v in query_params.items()
                        if k not in tracking_params}
-        
+
         # Rebuild URL with domain + path + clean params
         clean_query = urlencode(clean_params, doseq=True)
         normalized = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
         if clean_query:
             normalized += f"?{clean_query}"
-        
+
         return normalized
     except Exception as e:
         logger.warning(f"Error normalizing URL {url}: {e}")
         return url
 
 
+def utc_now() -> datetime:
+    """Return current time as a timezone-aware UTC datetime.
+
+    Use this anywhere the legacy code called `datetime.utcnow()`. The return
+    is timezone-aware (tzinfo=UTC), so arithmetic against it must use other
+    timezone-aware datetimes. Use `.replace(tzinfo=None)` only when comparing
+    against naive datetimes parsed from stored ISO strings.
+    """
+    return datetime.now(UTC)
+
+
 def get_timestamp() -> str:
-    """Get current timestamp in ISO 8601 format."""
-    return datetime.utcnow().isoformat() + 'Z'
+    """Return current UTC time as an ISO 8601 string with a trailing 'Z'.
+
+    Wire format: `YYYY-MM-DDTHH:MM:SS.ffffffZ` (microsecond precision). This
+    is the canonical wire format for DynamoDB sort keys, API responses, and
+    S3 object metadata in this project. Downstream code parses with either
+    `fromisoformat(s.replace('Z', '+00:00'))` or strict prefix matching.
+    """
+    return utc_now().isoformat().replace(_UTC_SUFFIX_NATIVE, _UTC_SUFFIX_WIRE)
 
 
-def safe_json_dumps(obj: Any) -> str:
-    """
-    Safely serialize object to JSON string.
-    
-    Args:
-        obj: Object to serialize
-        
-    Returns:
-        JSON string
-    """
-    try:
-        return json.dumps(obj, default=str)
-    except Exception as e:
-        logger.error(f"Error serializing to JSON: {e}")
-        return json.dumps({"error": "serialization_failed"})
+def get_timestamp_compact() -> str:
+    """Return current UTC time as `YYYYMMDD-HHMMSS`.
 
-
-def safe_json_loads(json_str: str) -> Optional[Dict]:
+    Used for S3 object prefixes and Step Functions execution names where a
+    filesystem-safe, lexicographically-sortable stamp is required. Second
+    precision — if you need more, use `get_timestamp()` and munge.
     """
-    Safely deserialize JSON string to object.
-    
-    Args:
-        json_str: JSON string to deserialize
-        
-    Returns:
-        Deserialized object or None if error
-    """
-    try:
-        return json.loads(json_str)
-    except Exception as e:
-        logger.error(f"Error deserializing JSON: {e}")
-        return None
-
-
-def truncate_text(text: str, max_length: int = 10000) -> str:
-    """
-    Truncate text to maximum length.
-    
-    Args:
-        text: Text to truncate
-        max_length: Maximum length
-        
-    Returns:
-        Truncated text
-    """
-    if len(text) <= max_length:
-        return text
-    return text[:max_length] + "... [truncated]"
+    return utc_now().strftime('%Y%m%d-%H%M%S')
 
 
 def extract_domain(url: str) -> str:
     """
     Extract domain from URL.
-    
+
     Args:
         url: URL to extract domain from
-        
+
     Returns:
         Domain name
     """
@@ -153,43 +136,3 @@ def extract_domain(url: str) -> str:
         return parsed.netloc
     except Exception:
         return "unknown"
-
-
-def create_error_response(error_message: str, status_code: int = 500) -> Dict:
-    """
-    Create standardized error response.
-    
-    Args:
-        error_message: Error message
-        status_code: HTTP status code
-        
-    Returns:
-        Error response dictionary
-    """
-    return {
-        "statusCode": status_code,
-        "body": json.dumps({
-            "error": error_message,
-            "timestamp": get_timestamp()
-        })
-    }
-
-
-def create_success_response(data: Any, status_code: int = 200) -> Dict:
-    """
-    Create standardized success response.
-    
-    Args:
-        data: Response data
-        status_code: HTTP status code
-        
-    Returns:
-        Success response dictionary
-    """
-    return {
-        "statusCode": status_code,
-        "body": json.dumps({
-            "data": data,
-            "timestamp": get_timestamp()
-        }, default=str)
-    }

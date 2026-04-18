@@ -13,24 +13,25 @@ Recommendation Types:
 """
 
 import json
+import logging
 import os
 import sys
-import logging
+from collections import defaultdict
+from typing import Any
+
 import boto3
 from boto3.dynamodb.conditions import Key
-from typing import Dict, Any, List
-from collections import defaultdict
-from datetime import datetime
+
 from decimal_utils import to_int
 
 # Add shared module to path
 sys.path.insert(0, '/opt/python')
 
-from shared.decorators import api_handler, validate
 from shared.api_response import success_response
-from shared.utils import get_brand_config
-from shared.models import ModelRole, invoke_bedrock
+from shared.decorators import api_handler, validate
 from shared.llm_json import parse_llm_json
+from shared.models import ModelRole, invoke_bedrock
+from shared.utils import get_brand_config, get_timestamp
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -44,18 +45,18 @@ CRAWLED_CONTENT_TABLE = os.environ['DYNAMODB_TABLE_CRAWLED_CONTENT']
 KEYWORDS_TABLE = os.environ.get('DYNAMODB_TABLE_KEYWORDS')  # Optional for fallback
 
 
-def generate_rule_based_recommendations(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+def generate_rule_based_recommendations(config: dict[str, Any]) -> list[dict[str, Any]]:
     """
     Generate recommendations based on rule-based analysis.
     """
     recommendations = []
     search_table = dynamodb.Table(SEARCH_RESULTS_TABLE)
-    
+
     # Get tracked brands
     tracked_brands = config.get("tracked_brands", {})
     first_party = [b.lower() for b in tracked_brands.get("first_party", [])]
     competitors = [b.lower() for b in tracked_brands.get("competitors", [])]
-    
+
     if not first_party:
         recommendations.append({
             'type': 'configuration',
@@ -66,7 +67,7 @@ def generate_rule_based_recommendations(config: Dict[str, Any]) -> List[Dict[str
             'impact': 'Required for all other recommendations'
         })
         return recommendations
-    
+
     # Get keywords from Keywords table (small, efficient scan)
     # Then query SearchResults by keyword (uses partition key)
     keywords_table_name = os.environ.get('DYNAMODB_TABLE_KEYWORDS')
@@ -81,7 +82,7 @@ def generate_rule_based_recommendations(config: Dict[str, Any]) -> List[Dict[str
             Limit=100
         )
         keywords = [item.get('keyword', '') for item in kw_response.get('Items', []) if item.get('keyword')]
-    
+
     if not keywords:
         # Fallback: scan with limit
         response = search_table.scan(Limit=500)
@@ -100,7 +101,7 @@ def generate_rule_based_recommendations(config: Dict[str, Any]) -> List[Dict[str
             except Exception as e:
                 logger.error(f"Error querying keyword {keyword}: {e}")
                 continue
-    
+
     if not items:
         recommendations.append({
             'type': 'data',
@@ -111,50 +112,50 @@ def generate_rule_based_recommendations(config: Dict[str, Any]) -> List[Dict[str
             'impact': 'Required to generate insights'
         })
         return recommendations
-    
+
     # Group by keyword
     keyword_data = defaultdict(list)
     for item in items:
         keyword_data[item.get('keyword', '')].append(item)
-    
+
     # Analyze each keyword
     keywords_without_fp = []
     keywords_with_low_rank = []
     keywords_with_competitor_dominance = []
     provider_gaps = defaultdict(list)  # provider -> keywords where FP doesn't appear
-    
+
     for keyword, results in keyword_data.items():
         # Get latest results
         latest_ts = max(r.get('timestamp', '') for r in results)
         latest = [r for r in results if r.get('timestamp') == latest_ts]
-        
+
         fp_found = False
         fp_best_rank = 999
         fp_providers = set()
         comp_mentions = 0
         all_providers = set()
-        
+
         for result in latest:
             provider = result.get('provider', '')
             all_providers.add(provider)
             brands = result.get('brands', [])
-            
+
             for brand in brands:
                 name = brand.get('name', '').lower()
                 rank = to_int(brand.get('rank'), 999)
-                
+
                 if any(fp in name or name in fp for fp in first_party):
                     fp_found = True
                     fp_best_rank = min(fp_best_rank, rank)
                     fp_providers.add(provider)
                 elif any(comp in name or name in comp for comp in competitors):
                     comp_mentions += 1
-        
+
         # Track provider gaps
         for provider in all_providers:
             if provider not in fp_providers:
                 provider_gaps[provider].append(keyword)
-        
+
         if not fp_found:
             keywords_without_fp.append({
                 'keyword': keyword,
@@ -166,16 +167,16 @@ def generate_rule_based_recommendations(config: Dict[str, Any]) -> List[Dict[str
                 'rank': fp_best_rank,
                 'providers': list(fp_providers)
             })
-        
+
         if comp_mentions > 0 and (not fp_found or fp_best_rank > comp_mentions):
             keywords_with_competitor_dominance.append({
                 'keyword': keyword,
                 'competitor_mentions': comp_mentions,
                 'fp_rank': fp_best_rank if fp_found else None
             })
-    
+
     # Generate recommendations based on analysis
-    
+
     # 1. Keywords where first-party doesn't appear
     if keywords_without_fp:
         top_gaps = sorted(keywords_without_fp, key=lambda x: -x['competitor_mentions'])[:5]
@@ -188,7 +189,7 @@ def generate_rule_based_recommendations(config: Dict[str, Any]) -> List[Dict[str
             'keywords': [k['keyword'] for k in top_gaps],
             'impact': f'Potential to capture {sum(k["competitor_mentions"] for k in keywords_without_fp)} competitor mentions'
         })
-    
+
     # 2. Low ranking keywords
     if keywords_with_low_rank:
         recommendations.append({
@@ -200,7 +201,7 @@ def generate_rule_based_recommendations(config: Dict[str, Any]) -> List[Dict[str
             'keywords': [f"{k['keyword']} (rank {k['rank']})" for k in keywords_with_low_rank[:5]],
             'impact': 'Moving to top 3 can significantly increase visibility'
         })
-    
+
     # 3. Provider-specific gaps
     for provider, keywords in provider_gaps.items():
         if len(keywords) >= 3:
@@ -213,7 +214,7 @@ def generate_rule_based_recommendations(config: Dict[str, Any]) -> List[Dict[str
                 'keywords': keywords[:5],
                 'impact': f'Expand visibility to {provider.title()} users'
             })
-    
+
     # 4. Competitor dominance
     if keywords_with_competitor_dominance:
         top_dominated = sorted(keywords_with_competitor_dominance, key=lambda x: -x['competitor_mentions'])[:3]
@@ -226,7 +227,7 @@ def generate_rule_based_recommendations(config: Dict[str, Any]) -> List[Dict[str
             'keywords': [k['keyword'] for k in top_dominated],
             'impact': 'Reclaim market share in AI search results'
         })
-    
+
     # 5. General best practices
     if len(recommendations) < 3:
         recommendations.append({
@@ -237,15 +238,15 @@ def generate_rule_based_recommendations(config: Dict[str, Any]) -> List[Dict[str
             'action': 'Review and refresh content quarterly. Monitor for broken links.',
             'impact': 'Sustained visibility over time'
         })
-    
+
     # Sort by priority
     priority_order = {'high': 0, 'medium': 1, 'low': 2}
     recommendations.sort(key=lambda x: priority_order.get(x.get('priority', 'low'), 2))
-    
+
     return recommendations
 
 
-def generate_llm_recommendations(config: Dict[str, Any], context: str) -> List[Dict[str, Any]]:
+def generate_llm_recommendations(config: dict[str, Any], context: str) -> list[dict[str, Any]]:
     """
     Generate recommendations using LLM for more sophisticated analysis.
     """
@@ -287,7 +288,7 @@ Focus on:
 
     except Exception as e:
         logger.error(f"LLM recommendation error: {e}")
-    
+
     return []
 
 
@@ -296,27 +297,27 @@ Focus on:
     'use_llm': {'type': bool, 'default': False},
     'keyword': {'type': str, 'max_length': 500}
 })
-def handler(event: Dict[str, Any], context: Any, use_llm: bool = False, keyword: str = None) -> Dict[str, Any]:
+def handler(event: dict[str, Any], context: Any, use_llm: bool = False, keyword: str | None = None) -> dict[str, Any]:
     """
     API handler for recommendations.
-    
+
     Query params:
         - use_llm: Whether to use LLM for enhanced recommendations (default: false)
         - keyword: Focus recommendations on specific keyword (optional)
     """
     config = get_brand_config()
-    
+
     # Generate rule-based recommendations
     recommendations = generate_rule_based_recommendations(config)
-    
+
     # Optionally enhance with LLM
     llm_recommendations = []
     if use_llm and recommendations:
         context_str = json.dumps(recommendations[:5], indent=2)
         llm_recommendations = generate_llm_recommendations(config, context_str)
-    
+
     result = {
-        'generated_at': datetime.utcnow().isoformat() + 'Z',
+        'generated_at': get_timestamp(),
         'recommendations': recommendations,
         'llm_enhanced': llm_recommendations if llm_recommendations else None,
         'total_count': len(recommendations),
@@ -326,5 +327,5 @@ def handler(event: Dict[str, Any], context: Any, use_llm: bool = False, keyword:
             'low': len([r for r in recommendations if r.get('priority') == 'low'])
         }
     }
-    
+
     return success_response(result, event)

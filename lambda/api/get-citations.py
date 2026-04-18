@@ -5,18 +5,19 @@ Returns deduplicated citation URLs sorted by total mentions across all keywords.
 Queries the CitationAnalysis-Citations table (deduplicated data) instead of raw search results.
 """
 
-import sys
 import logging
+import os
+import sys
+from collections import Counter, defaultdict
+
 import boto3
 from boto3.dynamodb.conditions import Key
-from collections import Counter, defaultdict
-import os
 
 # Add shared module to path
 sys.path.insert(0, '/opt/python')
 
-from shared.decorators import api_handler, validate
 from shared.api_response import success_response
+from shared.decorators import api_handler, validate
 from shared.utils import get_brand_config
 
 logger = logging.getLogger(__name__)

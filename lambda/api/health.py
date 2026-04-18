@@ -7,7 +7,8 @@ Returns 200 OK with system status.
 
 import json
 import logging
-from datetime import datetime
+
+from shared.utils import get_timestamp
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -16,7 +17,7 @@ logger.setLevel(logging.INFO)
 def handler(event, context):
     """
     Health check handler.
-    
+
     Returns:
         200 OK with timestamp and status
     """
@@ -28,7 +29,7 @@ def handler(event, context):
         },
         'body': json.dumps({
             'status': 'healthy',
-            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'timestamp': get_timestamp(),
             'service': 'citation-analysis-api',
         })
     }

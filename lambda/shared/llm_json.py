@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Literal, Optional, Union
+from typing import Any, Literal, Union
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ def _strip_code_fences(text: str) -> str:
     return after_fence.strip()
 
 
-def _extract_array(cleaned: str) -> Optional[str]:
+def _extract_array(cleaned: str) -> str | None:
     """Return a best-effort JSON array substring, salvaging truncated output."""
     start_idx = cleaned.find("[")
     if start_idx == -1:
@@ -75,7 +75,7 @@ def _extract_array(cleaned: str) -> Optional[str]:
     return partial[: last_brace + 1] + "]"
 
 
-def _extract_object(cleaned: str) -> Optional[str]:
+def _extract_object(cleaned: str) -> str | None:
     """Return a JSON object substring, or None if braces aren't balanced enough."""
     start_idx = cleaned.find("{")
     if start_idx == -1:
@@ -89,7 +89,7 @@ def _extract_object(cleaned: str) -> Optional[str]:
 def parse_llm_json(
     text: str,
     expect: Literal["object", "array"] = "object",
-) -> Optional[JsonLike]:
+) -> JsonLike | None:
     """Parse JSON from an LLM response, tolerating code fences and prose.
 
     Args:

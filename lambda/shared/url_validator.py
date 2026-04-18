@@ -12,7 +12,6 @@ Returns generic error messages that do not leak resolved IPs or internal topolog
 import ipaddress
 import logging
 import socket
-from typing import Tuple
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -49,7 +48,7 @@ def _is_ip_blocked(ip_str: str) -> bool:
         return False
 
 
-def validate_url_safe(url: str) -> Tuple[bool, str]:
+def validate_url_safe(url: str) -> tuple[bool, str]:
     """
     Validate that a URL is safe for server-side fetching (SSRF prevention).
 

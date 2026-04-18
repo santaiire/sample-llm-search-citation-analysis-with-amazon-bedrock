@@ -10,9 +10,7 @@ Covers:
 
 import os
 import sys
-import json
-from unittest.mock import patch, MagicMock, call
-from decimal import Decimal
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -109,7 +107,7 @@ class TestGetProviderModel:
         with patch('handler.dynamodb', mock_db):
             import handler
             handler._provider_model_cache.clear()
-            
+
             assert handler.get_provider_model('openai') == 'gpt-5-mini'
             handler._provider_model_cache.clear()
             assert handler.get_provider_model('perplexity') == 'sonar'
@@ -212,8 +210,9 @@ class TestQueryOpenAIModel:
 
     def test_default_model_is_gpt41(self):
         """Default model parameter is gpt-5-mini."""
-        import handler
         import inspect
+
+        import handler
         sig = inspect.signature(handler.query_openai)
         assert sig.parameters['model'].default == 'gpt-5-mini'
 
@@ -237,8 +236,7 @@ class TestQueryTemplateSubstitution:
             )
 
         call_args = mock_client.responses_with_web_search.call_args
-        query = call_args.kwargs.get('query') or call_args[1].get('query')
-        assert query == 'As a family traveler, find me hotels in malaga'
+        assert call_args.kwargs.get('query') == 'As a family traveler, find me hotels in malaga'
 
     def test_openai_default_query_without_template(self):
         """query_openai uses default format when no template provided."""
@@ -253,8 +251,7 @@ class TestQueryTemplateSubstitution:
             handler.query_openai('hotels in malaga', 'key')
 
         call_args = mock_client.responses_with_web_search.call_args
-        query = call_args.kwargs.get('query') or call_args[1].get('query')
-        assert query == 'Search for information about: hotels in malaga'
+        assert call_args.kwargs.get('query') == 'Search for information about: hotels in malaga'
 
     def test_perplexity_uses_template(self):
         """query_perplexity substitutes {keyword} in template."""
@@ -274,7 +271,7 @@ class TestQueryTemplateSubstitution:
             )
 
         call_args = mock_client.chat_completion.call_args
-        messages = call_args[0][0] if call_args[0] else call_args.kwargs.get('messages')
+        messages = call_args.args[0]
         assert messages[0]['content'] == 'As a business traveler, find hotels in malaga'
 
     def test_gemini_uses_template(self):
@@ -291,8 +288,7 @@ class TestQueryTemplateSubstitution:
             )
 
         call_args = mock_client.generate_content.call_args
-        query = call_args[0][0]
-        assert query == 'From the US, find me hotels in malaga'
+        assert call_args.args[0] == 'From the US, find me hotels in malaga'
 
 
 class TestHandlerPromptLoop:
@@ -304,7 +300,7 @@ class TestHandlerPromptLoop:
 
         with patch.object(handler, 'execute_all_providers', return_value=[]) as mock_exec, \
              patch.object(handler, 'store_search_results', return_value=True):
-            result = handler.handler({
+            handler.handler({
                 'keyword': 'test',
                 'timestamp': '2026-01-01T00:00:00Z',
             }, {})
@@ -319,7 +315,7 @@ class TestHandlerPromptLoop:
 
         with patch.object(handler, 'execute_all_providers', return_value=[]) as mock_exec, \
              patch.object(handler, 'store_search_results', return_value=True):
-            result = handler.handler({
+            handler.handler({
                 'keyword': 'test',
                 'timestamp': '2026-01-01T00:00:00Z',
                 'query_prompts': [
@@ -339,7 +335,7 @@ class TestHandlerPromptLoop:
             'status': 'success', 'raw_response': None, 'metadata': {},
         }
 
-        with patch.object(handler, 'execute_all_providers', return_value=[fake_result.copy()]) as mock_exec, \
+        with patch.object(handler, 'execute_all_providers', return_value=[fake_result.copy()]), \
              patch.object(handler, 'store_search_results', return_value=True) as mock_store:
             handler.handler({
                 'keyword': 'test',
@@ -350,7 +346,7 @@ class TestHandlerPromptLoop:
             }, {})
 
         # Check that store was called with results tagged with prompt info
-        stored_results = mock_store.call_args[0][2]
+        stored_results = mock_store.call_args.args[2]
         assert stored_results[0]['query_prompt_id'] == 'p1'
         assert stored_results[0]['query_prompt_name'] == 'Family'
 

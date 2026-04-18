@@ -18,15 +18,3 @@ def to_int(value, default=0) -> int:
         return int(value) if value else default
     except (ValueError, TypeError):
         return default
-
-
-def to_float(value, default=0.0) -> float:
-    """Convert Decimal or any numeric to float."""
-    if value is None:
-        return default
-    if isinstance(value, Decimal):
-        return float(value)
-    try:
-        return float(value) if value else default
-    except (ValueError, TypeError):
-        return default

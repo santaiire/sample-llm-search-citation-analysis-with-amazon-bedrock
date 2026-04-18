@@ -6,30 +6,33 @@ Leverages the same AI providers (OpenAI, Perplexity, Gemini, Claude) used in the
 search functionality, all with native web search capabilities for real-time data.
 """
 
+import contextlib
 import json
+import logging
+import os
+import re
+import sys
+import time
+import uuid
+from typing import Any
+from urllib.parse import urlparse
+
 import boto3
 import requests
-import logging
-import sys
-from typing import Dict, Any, List, Optional
-import os
-from datetime import datetime
-import uuid
-import re
-from urllib.parse import urlparse
-import time
 
 # Add shared module to path
 sys.path.insert(0, '/opt/python')
 
-from shared.decorators import api_handler, parse_json_body, validate, route_handler
-from shared.api_response import success_response, validation_error, error_response
-from shared.url_validator import validate_url_safe
-
 # HTML parsing
 from bs4 import BeautifulSoup
 
+from shared.api_response import error_response, success_response, validation_error
+from shared.decorators import api_handler, parse_json_body, route_handler, validate
+from shared.url_validator import validate_url_safe
+
 # Configure logging
+from shared.utils import get_timestamp
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -51,17 +54,17 @@ _secrets_cache_time = {}
 SECRETS_CACHE_TTL = 300
 
 
-def get_secret(secret_name: str) -> Optional[str]:
+def get_secret(secret_name: str) -> str | None:
     """Retrieve secret from Secrets Manager with caching."""
     current_time = time.time()
     full_name = f"{SECRETS_PREFIX}{secret_name}"
-    
+
     # Check cache
     if full_name in _secrets_cache:
         cache_time = _secrets_cache_time.get(full_name, 0)
         if current_time - cache_time < SECRETS_CACHE_TTL:
             return _secrets_cache[full_name]
-    
+
     try:
         response = secrets_client.get_secret_value(SecretId=full_name)
         secret_string = response['SecretString']
@@ -70,7 +73,7 @@ def get_secret(secret_name: str) -> Optional[str]:
             api_key = secret_data.get('api_key', secret_string)
         except json.JSONDecodeError:
             api_key = secret_string
-        
+
         _secrets_cache[full_name] = api_key
         _secrets_cache_time[full_name] = current_time
         return api_key
@@ -89,12 +92,12 @@ def get_secret(secret_name: str) -> Optional[str]:
 
 class PerplexityClient:
     """Perplexity API client - best for keyword research due to native web search."""
-    
+
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.base_url = "https://api.perplexity.ai"
-    
-    def search(self, query: str, model: str = "sonar") -> Dict[str, Any]:
+
+    def search(self, query: str, model: str = "sonar") -> dict[str, Any]:
         """Execute search with web grounding."""
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -104,7 +107,7 @@ class PerplexityClient:
             "model": model,
             "messages": [{"role": "user", "content": query}]
         }
-        
+
         response = requests.post(
             f"{self.base_url}/chat/completions",
             headers=headers,
@@ -117,12 +120,12 @@ class PerplexityClient:
 
 class OpenAIClient:
     """OpenAI API client with web search via Responses API."""
-    
+
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.base_url = "https://api.openai.com/v1"
-    
-    def search(self, query: str, model: str = "gpt-5-mini") -> Dict[str, Any]:
+
+    def search(self, query: str, model: str = "gpt-5-mini") -> dict[str, Any]:
         """Execute search with web grounding."""
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -134,7 +137,7 @@ class OpenAIClient:
             "tool_choice": "auto",
             "input": query
         }
-        
+
         response = requests.post(
             f"{self.base_url}/responses",
             headers=headers,
@@ -147,13 +150,13 @@ class OpenAIClient:
 
 class GeminiClient:
     """Gemini API client with Google Search grounding."""
-    
+
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.base_url = "https://generativelanguage.googleapis.com/v1beta"
         self.model = "gemini-3-flash-preview"
-    
-    def search(self, query: str) -> Dict[str, Any]:
+
+    def search(self, query: str) -> dict[str, Any]:
         """Execute search with Google Search grounding."""
         url = f"{self.base_url}/models/{self.model}:generateContent"
         headers = {"x-goog-api-key": self.api_key, "Content-Type": "application/json"}
@@ -161,7 +164,7 @@ class GeminiClient:
             "contents": [{"role": "user", "parts": [{"text": query}]}],
             "tools": [{"googleSearch": {}}]
         }
-        
+
         response = requests.post(url, json=payload, headers=headers, timeout=20)
         response.raise_for_status()
         return response.json()
@@ -205,10 +208,10 @@ def search_with_fallback(clients, prompt):
     raise last_error or Exception("All providers failed")
 
 
-def extract_response_text(response: Dict, provider: str) -> str:
+def extract_response_text(response: dict, provider: str) -> str:
     """Extract text from provider response."""
     logger.info(f"Extracting response text from {provider}, response keys: {list(response.keys())}")
-    
+
     if provider == 'perplexity':
         choices = response.get('choices', [])
         if not choices:
@@ -238,7 +241,7 @@ def extract_response_text(response: Dict, provider: str) -> str:
 # Page Scraping (fallback when AI web search doesn't have enough context)
 # =============================================================================
 
-def fetch_page_seo_elements(url: str) -> Dict[str, Any]:
+def fetch_page_seo_elements(url: str) -> dict[str, Any]:
     """
     Fetch a webpage and extract SEO-relevant elements.
     Used as supplementary data for AI analysis.
@@ -251,36 +254,36 @@ def fetch_page_seo_elements(url: str) -> Dict[str, Any]:
             'Accept-Encoding': 'gzip, deflate',
             'Connection': 'keep-alive',
         }
-        
+
         response = requests.get(url, headers=headers, timeout=5, allow_redirects=True)
         response.raise_for_status()
-        
+
         soup = BeautifulSoup(response.text, 'html.parser')
-        
+
         # Extract title
         title = ''
         title_tag = soup.find('title')
         if title_tag:
             title = title_tag.get_text(strip=True)
-        
+
         # Extract meta description
         meta_description = ''
         meta_desc_tag = soup.find('meta', attrs={'name': 'description'})
         if meta_desc_tag:
             meta_description = meta_desc_tag.get('content', '')
-        
+
         # Extract meta keywords
         meta_keywords = ''
         meta_kw_tag = soup.find('meta', attrs={'name': 'keywords'})
         if meta_kw_tag:
             meta_keywords = meta_kw_tag.get('content', '')
-        
+
         # Extract H1 tags
         h1_tags = [h1.get_text(strip=True) for h1 in soup.find_all('h1') if h1.get_text(strip=True)][:5]
-        
+
         # Extract H2 tags
         h2_tags = [h2.get_text(strip=True) for h2 in soup.find_all('h2') if h2.get_text(strip=True)][:10]
-        
+
         # Extract Open Graph tags
         og_tags = {}
         for og in soup.find_all('meta', attrs={'property': re.compile(r'^og:')}):
@@ -288,11 +291,11 @@ def fetch_page_seo_elements(url: str) -> Dict[str, Any]:
             content = og.get('content', '')
             if prop and content:
                 og_tags[prop] = content
-        
+
         # Parse domain
         parsed_url = urlparse(url)
         domain = parsed_url.netloc.replace('www.', '')
-        
+
         return {
             'success': True,
             'domain': domain,
@@ -303,12 +306,12 @@ def fetch_page_seo_elements(url: str) -> Dict[str, Any]:
             'h2_tags': h2_tags,
             'og_tags': og_tags,
         }
-        
+
     except Exception as e:
         logger.warning(f"Error fetching {url}: {e}")
         return {
-            'success': False, 
-            'error': str(e), 
+            'success': False,
+            'error': str(e),
             'domain': urlparse(url).netloc.replace('www.', '')
         }
 
@@ -319,7 +322,7 @@ def fetch_page_seo_elements(url: str) -> Dict[str, Any]:
     'industry': {'type': str, 'max_length': 100, 'default': 'general', 'source': 'body'},
     'count': {'type': int, 'min': 1, 'max': 50, 'default': 20, 'source': 'body'}
 })
-def _expand_keywords(event: Dict[str, Any], context: Any, body: Dict, seed_keyword: str, industry: str, count: int) -> Dict[str, Any]:
+def _expand_keywords(event: dict[str, Any], context: Any, body: dict, seed_keyword: str, industry: str, count: int) -> dict[str, Any]:
     """
     POST /api/keyword-research/expand
     Starts async keyword expansion. Returns immediately with a pending record.
@@ -331,7 +334,7 @@ def _expand_keywords(event: Dict[str, Any], context: Any, body: Dict, seed_keywo
 
         # Create pending record
         research_id = str(uuid.uuid4())
-        timestamp = datetime.utcnow().isoformat() + 'Z'
+        timestamp = get_timestamp()
 
         item = {
             'id': research_id,
@@ -382,7 +385,7 @@ def _expand_keywords(event: Dict[str, Any], context: Any, body: Dict, seed_keywo
 @validate({
     'url': {'required': True, 'type': str, 'max_length': 2048, 'source': 'body'}
 })
-def _analyze_competitor(event: Dict[str, Any], context: Any, body: Dict, url: str) -> Dict[str, Any]:
+def _analyze_competitor(event: dict[str, Any], context: Any, body: dict, url: str) -> dict[str, Any]:
     """
     POST /api/keyword-research/competitor
     Starts async competitor URL analysis. Returns immediately with a pending record.
@@ -401,7 +404,7 @@ def _analyze_competitor(event: Dict[str, Any], context: Any, body: Dict, url: st
 
     # Create pending record
     research_id = str(uuid.uuid4())
-    timestamp = datetime.utcnow().isoformat() + 'Z'
+    timestamp = get_timestamp()
     parsed_url = urlparse(competitor_url)
     domain = parsed_url.netloc.replace('www.', '')
 
@@ -503,15 +506,13 @@ Return ONLY a JSON array with this exact structure, no other text or explanation
 
     except Exception as e:
         logger.error(f"Keyword expansion failed for '{seed_keyword}': {e}")
-        try:
+        with contextlib.suppress(Exception):
             research_table.update_item(
                 Key={'id': research_id},
                 UpdateExpression='SET #s = :s, error_message = :e',
                 ExpressionAttributeNames={'#s': 'status'},
                 ExpressionAttributeValues={':s': 'failed', ':e': str(e)[:500]},
             )
-        except Exception:
-            pass
 
 
 def _process_competitor_sync(research_id: str, competitor_url: str, domain: str):
@@ -597,59 +598,57 @@ Return ONLY valid JSON:
 
     except Exception as e:
         logger.error(f"Competitor analysis failed for {domain}: {e}")
-        try:
+        with contextlib.suppress(Exception):
             research_table.update_item(
                 Key={'id': research_id},
                 UpdateExpression='SET #s = :s, error_message = :e',
                 ExpressionAttributeNames={'#s': 'status'},
                 ExpressionAttributeValues={':s': 'failed', ':e': str(e)[:500]},
             )
-        except Exception:
-            pass
 
 
 @validate({
     'type': {'type': str, 'choices': ['expansion', 'competitor']},
     'limit': {'type': int, 'min': 1, 'max': 100, 'default': 20}
 })
-def _get_history(event: Dict[str, Any], context: Any, type: str = None, limit: int = 20) -> Dict[str, Any]:
+def _get_history(event: dict[str, Any], context: Any, type: str | None = None, limit: int = 20) -> dict[str, Any]:
     """GET /api/keyword-research/history - Get keyword research history."""
     try:
         scan_params = {'Limit': limit}
-        
+
         if type:
             scan_params['FilterExpression'] = '#t = :type'
             scan_params['ExpressionAttributeNames'] = {'#t': 'type'}
             scan_params['ExpressionAttributeValues'] = {':type': type}
-        
+
         response = research_table.scan(**scan_params)
         items = response.get('Items', [])
-        
+
         # Sort by created_at descending
         items.sort(key=lambda x: x.get('created_at', ''), reverse=True)
-        
+
         # Remove raw_response from list view
         for item in items:
             item.pop('raw_response', None)
-        
+
         return success_response({
             'items': items,
             'count': len(items)
         }, event)
-        
+
     except Exception as e:
         logger.error(f"Failed to get history: {e}")
         return error_response(e, event)
 
 
-def _delete_research(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def _delete_research(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """DELETE /api/keyword-research/{id} - Delete a research result."""
     path_params = event.get('pathParameters') or {}
     research_id = path_params.get('id')
-    
+
     if not research_id:
         return validation_error('Research ID is required', event, 'id')
-    
+
     try:
         research_table.delete_item(Key={'id': research_id})
         return success_response({'message': 'Research deleted successfully'}, event)
@@ -665,12 +664,12 @@ def _delete_research(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     ('GET', '/history'): _get_history,
     ('DELETE', None): _delete_research,
 })
-def _route_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def _route_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Route handler for API Gateway requests."""
     pass  # Routes handle everything
 
 
-def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """
     Main handler - dispatches async invocations or routes API requests.
     """
@@ -697,7 +696,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     return _route_handler(event, context)
 
 
-def parse_keyword_json(text: str) -> List[Dict]:
+def parse_keyword_json(text: str) -> list[dict]:
     """Parse keyword JSON from AI response."""
     try:
         # Try to find JSON array in the response
@@ -710,7 +709,7 @@ def parse_keyword_json(text: str) -> List[Dict]:
         return []
 
 
-def parse_competitor_json(text: str) -> Dict:
+def parse_competitor_json(text: str) -> dict:
     """Parse competitor analysis JSON from AI response."""
     default_result = {
         'domain': '',
@@ -721,13 +720,13 @@ def parse_competitor_json(text: str) -> Dict:
         'longtail_keywords': [],
         'content_gaps': []
     }
-    
+
     if not text or not text.strip():
         logger.warning("Empty response text from AI provider")
         return default_result
-    
+
     logger.info(f"Parsing competitor JSON from response ({len(text)} chars): {text[:300]}...")
-    
+
     try:
         # Step 1: Try to extract JSON from markdown code blocks (```json ... ```)
         code_block_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', text)
@@ -736,7 +735,7 @@ def parse_competitor_json(text: str) -> Dict:
             result = json.loads(json_str)
             logger.info(f"Parsed JSON from code block: {list(result.keys())}")
             return {**default_result, **result}
-        
+
         # Step 2: Find first { and last } - most reliable for nested JSON
         start = text.find('{')
         end = text.rfind('}')
@@ -745,10 +744,10 @@ def parse_competitor_json(text: str) -> Dict:
             result = json.loads(json_str)
             logger.info(f"Parsed JSON with bracket matching: {list(result.keys())}")
             return {**default_result, **result}
-        
+
         logger.warning(f"No JSON object found in response: {text[:500]}")
         return default_result
-        
+
     except json.JSONDecodeError as e:
         logger.error(f"JSON parse error: {e}. Response text: {text[:1000]}")
         return default_result

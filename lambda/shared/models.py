@@ -27,15 +27,14 @@ import logging
 import os
 import random
 import time
-from enum import Enum
-from typing import Optional
+from enum import StrEnum
 
 import boto3
 
 logger = logging.getLogger(__name__)
 
 
-class ModelRole(str, Enum):
+class ModelRole(StrEnum):
     """Task-specific role for a Bedrock call."""
 
     SUMMARIZATION = "summarization"  # Crawler page summaries + SEO extraction
@@ -44,7 +43,7 @@ class ModelRole(str, Enum):
     ANALYSIS = "analysis"            # Recommendations, brand expansion, reasoning
 
 
-class ModelTier(str, Enum):
+class ModelTier(StrEnum):
     """Capability tier that maps to a specific model family."""
 
     FAST = "fast"          # Haiku — low latency, low cost
@@ -134,7 +133,7 @@ def invoke_bedrock(
     max_tokens: int = 2000,
     temperature: float = 0.0,
     max_retries: int = 5,
-    thinking: Optional[bool] = None,
+    thinking: bool | None = None,
 ) -> str:
     """
     Invoke Bedrock Converse API with exponential backoff on throttling.
@@ -187,7 +186,7 @@ def invoke_bedrock(
                 if "text" in block:
                     return block["text"]
             return ""
-        except Exception as exc:  # noqa: BLE001 — boto3 surfaces many types
+        except Exception as exc:
             error_str = str(exc)
             is_throttle = any(name in error_str for name in _THROTTLE_ERRORS)
             if is_throttle and attempt < max_retries - 1:

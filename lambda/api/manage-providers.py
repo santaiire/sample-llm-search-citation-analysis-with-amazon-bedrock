@@ -4,22 +4,20 @@ Manages AI provider settings: check status, enable/disable, update API keys
 """
 
 import json
-import os
 import logging
+import os
 import sys
+from typing import Any
+
 import boto3
 from botocore.exceptions import ClientError
-from datetime import datetime
-from typing import Any
 
 # Add shared module to path
 sys.path.insert(0, '/opt/python')
 
-from shared.decorators import api_handler, parse_json_body, route_handler, cors_preflight
-from shared.api_response import (
-    success_response, validation_error, 
-    not_found_response, api_response
-)
+from shared.api_response import api_response, not_found_response, success_response, validation_error
+from shared.decorators import api_handler, cors_preflight, parse_json_body, route_handler
+from shared.utils import get_timestamp
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -145,7 +143,7 @@ def get_provider_config(provider_id: str) -> dict:
         response = table.get_item(Key={'provider_id': provider_id})
         return response.get('Item', {'provider_id': provider_id, 'enabled': True})
     except Exception as e:
-        logger.error(f"Error getting provider config: {str(e)}")
+        logger.error(f"Error getting provider config: {e!s}")
         return {'provider_id': provider_id, 'enabled': True}
 
 
@@ -156,12 +154,12 @@ def save_provider_config(provider_id: str, config: dict) -> bool:
         item = {
             'provider_id': provider_id,
             'enabled': config.get('enabled', True),
-            'updated_at': datetime.utcnow().isoformat() + 'Z'
+            'updated_at': get_timestamp()
         }
         table.put_item(Item=item)
         return True
     except Exception as e:
-        logger.error(f"Error saving provider config: {str(e)}")
+        logger.error(f"Error saving provider config: {e!s}")
         return False
 
 
@@ -169,7 +167,7 @@ def update_api_key(secret_name: str, api_key: str) -> dict:
     """Create or update API key in Secrets Manager."""
     try:
         secret_value = json.dumps({'api_key': api_key})
-        
+
         try:
             # Try to update existing secret
             secrets_client.put_secret_value(
@@ -188,14 +186,14 @@ def update_api_key(secret_name: str, api_key: str) -> dict:
                 return {'success': True, 'action': 'created'}
             raise
     except Exception as e:
-        logger.error(f"Error updating API key: {str(e)}")
+        logger.error(f"Error updating API key: {e!s}")
         return {'success': False}
 
 
 def validate_api_key(provider_id: str, api_key: str) -> dict:
     """Validate API key by making a simple test request."""
     import requests
-    
+
     try:
         if provider_id == 'openai':
             response = requests.get(
@@ -212,12 +210,12 @@ def validate_api_key(provider_id: str, api_key: str) -> dict:
                     pass
                 return {'valid': False, 'error': 'Invalid response format'}
             return {'valid': False, 'error': 'Invalid API key'}
-            
+
         elif provider_id == 'perplexity':
             if api_key.startswith('pplx-') and len(api_key) > 10:
                 return {'valid': True, 'note': 'Format looks correct'}
             return {'valid': False, 'error': 'Key should start with pplx-'}
-            
+
         elif provider_id == 'gemini':
             response = requests.get(
                 'https://generativelanguage.googleapis.com/v1beta/models',
@@ -233,12 +231,12 @@ def validate_api_key(provider_id: str, api_key: str) -> dict:
                     pass
                 return {'valid': False, 'error': 'Invalid response format'}
             return {'valid': False, 'error': 'Invalid API key'}
-            
+
         elif provider_id == 'claude':
             if api_key.startswith('sk-ant-') and len(api_key) > 10:
                 return {'valid': True, 'note': 'Format looks correct'}
             return {'valid': False, 'error': 'Key should start with sk-ant-'}
-        
+
         # Search providers validation
         elif provider_id == 'brave':
             response = requests.get(
@@ -250,7 +248,7 @@ def validate_api_key(provider_id: str, api_key: str) -> dict:
             if response.status_code == 200:
                 return {'valid': True}
             return {'valid': False, 'error': 'Invalid API key'}
-        
+
         elif provider_id == 'tavily':
             response = requests.post(
                 'https://api.tavily.com/search',
@@ -260,7 +258,7 @@ def validate_api_key(provider_id: str, api_key: str) -> dict:
             if response.status_code == 200:
                 return {'valid': True}
             return {'valid': False, 'error': 'Invalid API key'}
-        
+
         elif provider_id == 'exa':
             response = requests.post(
                 'https://api.exa.ai/search',
@@ -271,7 +269,7 @@ def validate_api_key(provider_id: str, api_key: str) -> dict:
             if response.status_code == 200:
                 return {'valid': True}
             return {'valid': False, 'error': 'Invalid API key'}
-        
+
         elif provider_id == 'serpapi':
             response = requests.get(
                 'https://serpapi.com/search',
@@ -281,28 +279,28 @@ def validate_api_key(provider_id: str, api_key: str) -> dict:
             if response.status_code == 200:
                 return {'valid': True}
             return {'valid': False, 'error': 'Invalid API key'}
-        
+
         elif provider_id == 'firecrawl':
             if len(api_key) > 10:
                 return {'valid': True, 'note': 'Format looks correct'}
             return {'valid': False, 'error': 'Key appears too short'}
-            
+
         return {'valid': False, 'error': 'Unknown provider'}
     except requests.Timeout:
         return {'valid': False, 'error': 'Validation request timed out'}
     except Exception as e:
-        logger.error(f"Error validating API key for {provider_id}: {str(e)}")
+        logger.error(f"Error validating API key for {provider_id}: {e!s}")
         return {'valid': False, 'error': 'Validation failed'}
 
 
 def handle_get_providers(event: dict, context: Any) -> dict:
     """GET /providers - Get all providers with their status."""
     providers = []
-    
+
     for provider_id, info in PROVIDERS.items():
         secret_status = get_secret_status(info['secret_name'])
         config = get_provider_config(provider_id)
-        
+
         providers.append({
             'id': provider_id,
             'name': info['name'],
@@ -315,36 +313,36 @@ def handle_get_providers(event: dict, context: Any) -> dict:
             'masked_key': secret_status.get('masked_key'),
             'last_updated': secret_status.get('last_updated')
         })
-    
+
     return success_response({'providers': providers}, event)
 
 
 @parse_json_body
-def handle_update_provider(event: dict, context: Any, body: dict = None) -> dict:
+def handle_update_provider(event: dict, context: Any, body: dict | None = None) -> dict:
     """PUT /providers/{id} - Update provider configuration."""
     path_params = event.get('pathParameters') or {}
     provider_id = path_params.get('id')
-    
+
     if not provider_id or provider_id not in PROVIDERS:
         return not_found_response(f'Provider {provider_id}', event)
-    
+
     body = body or {}
-    
+
     # Update enabled status
     if 'enabled' in body:
         config = get_provider_config(provider_id)
         config['enabled'] = bool(body['enabled'])
         if not save_provider_config(provider_id, config):
             return api_response(500, {'error': 'Failed to save configuration'}, event)
-    
+
     # Update API key
-    if 'api_key' in body and body['api_key']:
+    if body.get('api_key'):
         api_key = body['api_key'].strip()
-        
+
         # Input validation - reasonable key length
         if len(api_key) > 500:
             return validation_error('API key too long', event)
-        
+
         # Optionally validate the key first
         if body.get('validate', True):
             validation = validate_api_key(provider_id, api_key)
@@ -353,15 +351,15 @@ def handle_update_provider(event: dict, context: Any, body: dict = None) -> dict
                     'error': 'Invalid API key',
                     'details': validation.get('error', 'Validation failed')
                 }, event)
-        
+
         result = update_api_key(PROVIDERS[provider_id]['secret_name'], api_key)
         if not result.get('success'):
             return api_response(500, {'error': 'Failed to update API key'}, event)
-    
+
     # Return updated status
     secret_status = get_secret_status(PROVIDERS[provider_id]['secret_name'])
     config = get_provider_config(provider_id)
-    
+
     return success_response({
         'id': provider_id,
         'enabled': config.get('enabled', True),
@@ -371,19 +369,19 @@ def handle_update_provider(event: dict, context: Any, body: dict = None) -> dict
 
 
 @parse_json_body
-def handle_validate_key(event: dict, context: Any, body: dict = None) -> dict:
+def handle_validate_key(event: dict, context: Any, body: dict | None = None) -> dict:
     """POST /providers/{id}/validate - Validate an API key without saving it."""
     path_params = event.get('pathParameters') or {}
     provider_id = path_params.get('id')
-    
+
     if not provider_id or provider_id not in PROVIDERS:
         return not_found_response(f'Provider {provider_id}', event)
-    
+
     body = body or {}
     api_key = body.get('api_key', '').strip()
     if not api_key:
         return validation_error('API key required', event, 'api_key')
-    
+
     result = validate_api_key(provider_id, api_key)
     return success_response(result, event)
 
@@ -398,7 +396,7 @@ def handle_validate_key(event: dict, context: Any, body: dict = None) -> dict:
 def handler(event: dict, context: Any) -> dict:
     """
     Provider Configuration API Lambda Handler
-    
+
     Endpoints:
     - GET /providers - List all providers with status
     - PUT /providers/{id} - Update provider config (enable/disable, API key)

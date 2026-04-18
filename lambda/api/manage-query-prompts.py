@@ -5,23 +5,23 @@ CRUD operations for query prompt templates with persona modifiers.
 Each prompt contains a {keyword} placeholder that gets substituted during analysis.
 """
 
-import json
+import logging
 import os
 import sys
-import logging
-from datetime import datetime
 import uuid
+
+import boto3
 
 # Add shared module to path
 sys.path.insert(0, '/opt/python')
 
-from shared.decorators import api_handler, parse_json_body, validate
 from shared.api_response import success_response, validation_error
+from shared.decorators import api_handler, parse_json_body, validate
+from shared.utils import get_timestamp
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-import boto3
 dynamodb = boto3.resource('dynamodb')
 
 # Fail-fast: Required environment variables
@@ -89,7 +89,7 @@ def create_prompt(event, context, body, name, template, description):
         )
 
     prompt_id = str(uuid.uuid4())
-    timestamp = datetime.utcnow().isoformat() + 'Z'
+    timestamp = get_timestamp()
 
     item = {
         'id': prompt_id,
@@ -124,7 +124,7 @@ def update_prompt(event, context, prompt_id, body, name, template, description):
             'Template must contain {keyword} placeholder', event, 'template'
         )
 
-    timestamp = datetime.utcnow().isoformat() + 'Z'
+    timestamp = get_timestamp()
 
     update_expr = 'SET updated_at = :u'
     expr_values = {':u': timestamp}
@@ -176,7 +176,7 @@ def toggle_prompt(event, context, prompt_id):
         return validation_error('Query prompt not found', event, 'id')
 
     new_enabled = 'false' if item.get('enabled') == 'true' else 'true'
-    timestamp = datetime.utcnow().isoformat() + 'Z'
+    timestamp = get_timestamp()
 
     result = query_prompts_table.update_item(
         Key={'id': prompt_id},

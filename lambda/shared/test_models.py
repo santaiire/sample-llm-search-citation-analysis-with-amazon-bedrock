@@ -14,7 +14,7 @@ Covers:
 import importlib
 import os
 import sys
-from typing import Iterator
+from collections.abc import Iterator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -35,7 +35,7 @@ def clear_bedrock_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 @pytest.fixture
 def models_module():
     """Import a fresh copy of models so module-level state is reset."""
-    import models  # noqa: WPS433 — local import is intentional
+    import models
     importlib.reload(models)
     # Reset lazy client between tests
     models._bedrock_client = None

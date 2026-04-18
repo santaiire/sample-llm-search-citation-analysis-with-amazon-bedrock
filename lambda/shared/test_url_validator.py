@@ -11,14 +11,12 @@ import os
 import sys
 from unittest.mock import patch
 
-import pytest
-from hypothesis import given, settings, assume
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
-from url_validator import validate_url_safe, _is_ip_blocked
-
+from url_validator import validate_url_safe
 
 # =============================================================================
 # Property-Based Tests
@@ -125,19 +123,19 @@ class TestURLValidatorUnit:
         assert 'restricted' in error.lower()
 
     def test_127_0_0_1_blocked(self):
-        is_safe, error = validate_url_safe('http://127.0.0.1/latest/meta-data/')
+        is_safe, _ = validate_url_safe('http://127.0.0.1/latest/meta-data/')
         assert not is_safe
 
     def test_ipv6_loopback_blocked(self):
-        is_safe, error = validate_url_safe('http://[::1]:8080/')
+        is_safe, _ = validate_url_safe('http://[::1]:8080/')
         assert not is_safe
 
     def test_metadata_endpoint_blocked(self):
-        is_safe, error = validate_url_safe('http://169.254.169.254/latest/meta-data/')
+        is_safe, _ = validate_url_safe('http://169.254.169.254/latest/meta-data/')
         assert not is_safe
 
     def test_zero_address_blocked(self):
-        is_safe, error = validate_url_safe('http://0.0.0.0/')
+        is_safe, _ = validate_url_safe('http://0.0.0.0/')
         assert not is_safe
 
     def test_valid_public_url(self):
@@ -148,7 +146,7 @@ class TestURLValidatorUnit:
             assert error == ''
 
     def test_empty_string_rejected(self):
-        is_safe, error = validate_url_safe('')
+        is_safe, _ = validate_url_safe('')
         assert not is_safe
 
     def test_missing_scheme_rejected(self):
@@ -169,11 +167,11 @@ class TestURLValidatorUnit:
         assert 'scheme' in error.lower()
 
     def test_javascript_scheme_rejected(self):
-        is_safe, error = validate_url_safe('javascript:alert(1)')
+        is_safe, _ = validate_url_safe('javascript:alert(1)')
         assert not is_safe
 
     def test_link_local_169_254_range_blocked(self):
         addr_info = [(2, 1, 6, '', ('169.254.1.1', 0))]
         with patch('url_validator.socket.getaddrinfo', return_value=addr_info):
-            is_safe, error = validate_url_safe('https://sneaky.example.com')
+            is_safe, _ = validate_url_safe('https://sneaky.example.com')
             assert not is_safe

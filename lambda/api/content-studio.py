@@ -12,25 +12,26 @@ Endpoints:
 """
 
 import json
+import logging
 import os
 import sys
 import uuid
-import boto3
-import logging
-from boto3.dynamodb.conditions import Key
-from typing import Dict, Any, List
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
+from typing import Any
 from urllib.parse import urlparse
+
+import boto3
+from boto3.dynamodb.conditions import Key
 
 # Add shared module to path
 sys.path.insert(0, '/opt/python')
 
-from shared.decorators import api_handler, parse_json_body, validate, route_handler
-from shared.api_response import success_response, validation_error, api_response
-from shared.utils import get_brand_config
-from shared.models import ModelRole, get_model_tier, invoke_bedrock, BedrockInvocationError
 from decimal_utils import to_int
+from shared.api_response import api_response, success_response, validation_error
+from shared.decorators import api_handler, parse_json_body, route_handler, validate
+from shared.models import BedrockInvocationError, ModelRole, get_model_tier, invoke_bedrock
+from shared.utils import get_brand_config, get_timestamp, utc_now
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -58,13 +59,13 @@ def extract_domain(url: str) -> str:
         return url
 
 
-def _get_seasonal_suggestions(keywords: List[str], config: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _get_seasonal_suggestions(keywords: list[str], config: dict[str, Any]) -> list[dict[str, Any]]:
     """Generate seasonal and trending content suggestions based on current date and keywords."""
     ideas = []
-    now = datetime.utcnow()
+    now = utc_now()
     month = now.month
     industry = config.get('industry', 'general')
-    
+
     # Seasonal themes by month
     seasonal_themes = {
         1: ['new year', 'winter', 'january deals', 'fresh start'],
@@ -80,7 +81,7 @@ def _get_seasonal_suggestions(keywords: List[str], config: Dict[str, Any]) -> Li
         11: ['thanksgiving', 'november', 'black friday', 'holiday prep'],
         12: ['holiday', 'christmas', 'december', 'new year', 'winter']
     }
-    
+
     # Industry-specific seasonal content
     industry_seasonal = {
         'hotels': {
@@ -109,10 +110,10 @@ def _get_seasonal_suggestions(keywords: List[str], config: Dict[str, Any]) -> Li
             12: 'Holiday Travel Tips'
         }
     }
-    
+
     current_themes = seasonal_themes.get(month, [])
     industry_content = industry_seasonal.get(industry, {}).get(month)
-    
+
     # Check if any keywords relate to seasonal themes
     for keyword in keywords[:10]:  # Limit to first 10 keywords
         keyword_lower = keyword.lower()
@@ -132,7 +133,7 @@ def _get_seasonal_suggestions(keywords: List[str], config: Dict[str, Any]) -> Li
                     'content_angle': 'seasonal'
                 })
                 break  # Only one seasonal idea per keyword
-    
+
     # Add industry-specific seasonal suggestion if available
     if industry_content and keywords:
         ideas.append({
@@ -148,7 +149,7 @@ def _get_seasonal_suggestions(keywords: List[str], config: Dict[str, Any]) -> Li
             'actionable': True,
             'content_angle': 'trending'
         })
-    
+
     # Add evergreen content suggestion
     if keywords:
         ideas.append({
@@ -163,15 +164,15 @@ def _get_seasonal_suggestions(keywords: List[str], config: Dict[str, Any]) -> Li
             'actionable': True,
             'content_angle': 'evergreen'
         })
-    
+
     return ideas
 
 
-def get_crawled_content(urls: List[str], limit: int = 5) -> List[Dict[str, Any]]:
+def get_crawled_content(urls: list[str], limit: int = 5) -> list[dict[str, Any]]:
     """Get crawled content for competitor analysis."""
     table = dynamodb.Table(CRAWLED_CONTENT_TABLE)
     content_list = []
-    
+
     for url in urls[:limit]:
         try:
             response = table.query(
@@ -191,20 +192,20 @@ def get_crawled_content(urls: List[str], limit: int = 5) -> List[Dict[str, Any]]
                 })
         except Exception as e:
             logger.error(f"Error getting crawled content for {url}: {e}")
-    
+
     return content_list
 
 
-def generate_content_ideas(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+def generate_content_ideas(config: dict[str, Any]) -> list[dict[str, Any]]:
     """Generate content ideas from multiple sources."""
     ideas = []
-    
+
     search_table = dynamodb.Table(SEARCH_RESULTS_TABLE)
-    
+
     tracked_brands = config.get("tracked_brands", {})
     first_party = [b.lower() for b in tracked_brands.get("first_party", [])]
     competitors = [b.lower() for b in tracked_brands.get("competitors", [])]
-    
+
     if not first_party:
         return [{
             'id': str(uuid.uuid4()),
@@ -217,7 +218,7 @@ def generate_content_ideas(config: Dict[str, Any]) -> List[Dict[str, Any]]:
             'competitor_urls': [],
             'actionable': False
         }]
-    
+
     # Get keywords from Keywords table (small, efficient scan)
     # Then query SearchResults by keyword (uses partition key)
     keywords_table_name = os.environ.get('DYNAMODB_TABLE_KEYWORDS')
@@ -232,7 +233,7 @@ def generate_content_ideas(config: Dict[str, Any]) -> List[Dict[str, Any]]:
             Limit=100
         )
         keywords = [item.get('keyword', '') for item in kw_response.get('Items', []) if item.get('keyword')]
-    
+
     if not keywords:
         # Fallback: scan with limit
         response = search_table.scan(Limit=500)
@@ -251,7 +252,7 @@ def generate_content_ideas(config: Dict[str, Any]) -> List[Dict[str, Any]]:
             except Exception as e:
                 logger.error(f"Error querying keyword {keyword}: {e}")
                 continue
-    
+
     if not items:
         return [{
             'id': str(uuid.uuid4()),
@@ -264,14 +265,14 @@ def generate_content_ideas(config: Dict[str, Any]) -> List[Dict[str, Any]]:
             'competitor_urls': [],
             'actionable': False
         }]
-    
+
     keyword_data = defaultdict(list)
     has_any_brands = False
     for item in items:
         keyword_data[item.get('keyword', '')].append(item)
         if item.get('brands'):
             has_any_brands = True
-    
+
     # If no brand data extracted yet, show citation-based opportunities
     if not has_any_brands:
         for keyword, results in keyword_data.items():
@@ -280,7 +281,7 @@ def generate_content_ideas(config: Dict[str, Any]) -> List[Dict[str, Any]]:
             all_citations = []
             for result in results:
                 all_citations.extend(result.get('citations', []))
-            
+
             if all_citations:
                 ideas.append({
                     'id': str(uuid.uuid4()),
@@ -300,10 +301,10 @@ def generate_content_ideas(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     for keyword, results in keyword_data.items():
         if not keyword:
             continue
-            
+
         latest_ts = max(r.get('timestamp', '') for r in results)
         latest = [r for r in results if r.get('timestamp') == latest_ts]
-        
+
         fp_found = False
         fp_best_rank = 999
         fp_providers = set()
@@ -312,19 +313,19 @@ def generate_content_ideas(config: Dict[str, Any]) -> List[Dict[str, Any]]:
         all_providers = set()
         competitor_citations = []
         all_citations = []
-        
+
         for result in latest:
             provider = result.get('provider', '')
             all_providers.add(provider)
             brands = result.get('brands', [])
             citations = result.get('citations', [])
             all_citations.extend(citations)
-            
+
             for brand in brands:
                 name = brand.get('name', '').lower()
                 rank = to_int(brand.get('rank'), 999)
                 sentiment = brand.get('sentiment', 'neutral')
-                
+
                 if any(fp in name or name in fp for fp in first_party):
                     fp_found = True
                     fp_best_rank = min(fp_best_rank, rank)
@@ -333,10 +334,10 @@ def generate_content_ideas(config: Dict[str, Any]) -> List[Dict[str, Any]]:
                 elif any(comp in name or name in comp for comp in competitors):
                     comp_mentions.append({'name': brand.get('name'), 'rank': rank, 'provider': provider})
                     competitor_citations.extend(citations)
-        
+
         competitor_citations = list(set(competitor_citations))[:10]
         all_citations = list(set(all_citations))[:10]
-        
+
         # Visibility gap: competitors appear but you don't
         if not fp_found and comp_mentions:
             ideas.append({
@@ -387,7 +388,7 @@ def generate_content_ideas(config: Dict[str, Any]) -> List[Dict[str, Any]]:
                 'actionable': True,
                 'content_angle': 'thought_leadership'
             })
-        
+
         # Provider gap: you appear on some providers but not others
         missing_providers = all_providers - fp_providers
         if fp_found and missing_providers:
@@ -405,7 +406,7 @@ def generate_content_ideas(config: Dict[str, Any]) -> List[Dict[str, Any]]:
                 'actionable': True,
                 'content_angle': 'provider_optimization'
             })
-        
+
         # Sentiment improvement: you appear but with negative sentiment
         negative_count = sum(1 for s in fp_sentiment if s == 'negative')
         if fp_found and negative_count > 0:
@@ -423,60 +424,30 @@ def generate_content_ideas(config: Dict[str, Any]) -> List[Dict[str, Any]]:
                 'actionable': True,
                 'content_angle': 'reputation_management'
             })
-    
+
     # Add seasonal/trending content ideas based on keywords
     seasonal_keywords = _get_seasonal_suggestions(list(keyword_data.keys()), config)
     ideas.extend(seasonal_keywords)
-
-    # Add self-reflection recommendations as content ideas
-    try:
-        self_reflection_table_name = os.environ.get('DYNAMODB_TABLE_SELF_REFLECTION')
-        if self_reflection_table_name:
-            sr_table = dynamodb.Table(self_reflection_table_name)
-            seven_days_ago = (datetime.utcnow() - timedelta(days=7)).isoformat() + 'Z'
-            sr_response = sr_table.scan(
-                FilterExpression='created_at >= :since',
-                ExpressionAttributeValues={':since': seven_days_ago},
-                Limit=100
-            )
-            for sr_item in sr_response.get('Items', []):
-                for rec in sr_item.get('recommendations', []):
-                    ideas.append({
-                        'id': str(uuid.uuid4()),
-                        'type': 'self_reflection',
-                        'priority': rec.get('priority', 'medium'),
-                        'title': rec.get('title', 'Self-Reflection Recommendation'),
-                        'description': rec.get('description', ''),
-                        'keyword': sr_item.get('keyword', ''),
-                        'source': 'self_reflection',
-                        'persona_name': sr_item.get('query_prompt_name', ''),
-                        'persona_id': sr_item.get('query_prompt_id', ''),
-                        'gap_reference': rec.get('gap_reference', ''),
-                        'content_angle': rec.get('content_type', 'comprehensive_guide'),
-                        'actionable': True,
-                    })
-    except Exception as e:
-        logger.warning(f"Failed to fetch self-reflection recommendations: {e}")
 
     priority_order = {'high': 0, 'medium': 1, 'low': 2}
     ideas.sort(key=lambda x: (priority_order.get(x.get('priority', 'low'), 2), x.get('keyword', '')))
     return ideas[:50]  # Increased from 30 to 50
 
 
-def generate_content(idea: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+def generate_content(idea: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     """Generate content using Bedrock Claude based on idea and competitor analysis."""
     keyword = idea.get('keyword', '')
     content_angle = idea.get('content_angle', 'comprehensive_guide')
     competitor_urls = idea.get('competitor_urls', [])
-    
+
     # Get competitor content for analysis
     competitor_content = get_crawled_content(competitor_urls, limit=3)
-    
+
     tracked_brands = config.get("tracked_brands", {})
     first_party = tracked_brands.get("first_party", [])
     brand_name = first_party[0] if first_party else "your brand"
     industry = config.get("industry", "general")
-    
+
     # Build context from competitor content
     competitor_context = ""
     if competitor_content:
@@ -486,7 +457,7 @@ def generate_content(idea: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, 
             competitor_context += f"Title: {cc['title']}\n"
             if cc.get('content_preview'):
                 competitor_context += f"Content preview: {cc['content_preview'][:1000]}...\n"
-    
+
     # Build the prompt based on content angle
     if content_angle == 'differentiation':
         prompt = f"""Create a differentiated content piece for the keyword "{keyword}" that positions {brand_name} uniquely.
@@ -688,7 +659,7 @@ POINTS: [3 key takeaways as bullet points]"""
         }
 
 
-def parse_generated_content(text: str) -> Dict[str, Any]:
+def parse_generated_content(text: str) -> dict[str, Any]:
     """Parse the structured content from LLM response."""
     result = {
         'title': '',
@@ -697,22 +668,22 @@ def parse_generated_content(text: str) -> Dict[str, Any]:
         'suggested_headings': [],
         'key_points': []
     }
-    
+
     lines = text.split('\n')
-    
+
     # Extract title
     for line in lines:
         if line.strip().upper().startswith('TITLE:'):
             result['title'] = line.split(':', 1)[1].strip()
             break
-    
+
     # Extract meta description
     for line in lines:
         upper = line.strip().upper()
         if upper.startswith('META:') or upper.startswith('META_DESCRIPTION:'):
             result['meta_description'] = line.split(':', 1)[1].strip()[:160]
             break
-    
+
     # Find body content - everything between META line and HEADINGS/POINTS
     in_body = False
     body_lines = []
@@ -725,13 +696,13 @@ def parse_generated_content(text: str) -> Dict[str, Any]:
             break
         if in_body:
             body_lines.append(line)
-    
+
     result['body'] = '\n'.join(body_lines).strip()
-    
+
     # If no structured body found, use the whole text
     if not result['body']:
         result['body'] = text
-    
+
     # Extract headings
     for line in lines:
         upper_line = line.strip().upper()
@@ -740,7 +711,7 @@ def parse_generated_content(text: str) -> Dict[str, Any]:
             if after:
                 result['suggested_headings'] = [h.strip() for h in after.split(',') if h.strip()]
             break
-    
+
     # Extract key points
     in_points = False
     for line in lines:
@@ -752,43 +723,16 @@ def parse_generated_content(text: str) -> Dict[str, Any]:
             clean = line.strip().lstrip('-*0123456789. ')
             if clean:
                 result['key_points'].append(clean)
-    
+
     return result
 
 
-def save_generated_content(idea: Dict[str, Any], generation_result: Dict[str, Any]) -> Dict[str, Any]:
-    """Save generated content to DynamoDB."""
-    table = dynamodb.Table(CONTENT_STUDIO_TABLE)
-    content_id = str(uuid.uuid4())
-    timestamp = datetime.utcnow().isoformat() + 'Z'
-    
-    item = {
-        'id': content_id,
-        'idea_id': idea.get('id', ''),
-        'keyword': idea.get('keyword', ''),
-        'idea_type': idea.get('type', ''),
-        'idea_title': idea.get('title', ''),
-        'content_angle': generation_result.get('content_angle', ''),
-        'generated_content': generation_result.get('content', {}),
-        'raw_content': generation_result.get('raw_content', ''),
-        'model': generation_result.get('model', ''),
-        'competitor_sources_used': generation_result.get('competitor_sources_used', 0),
-        'status': 'generated',
-        'viewed': False,  # Track if user has viewed this content
-        'created_at': timestamp,
-        'updated_at': timestamp
-    }
-    
-    table.put_item(Item=item)
-    return {'id': content_id, **item}
-
-
-def create_pending_content(idea: Dict[str, Any]) -> Dict[str, Any]:
+def create_pending_content(idea: dict[str, Any]) -> dict[str, Any]:
     """Create a pending content record for async generation."""
     table = dynamodb.Table(CONTENT_STUDIO_TABLE)
     content_id = str(uuid.uuid4())
-    timestamp = datetime.utcnow().isoformat() + 'Z'
-    
+    timestamp = get_timestamp()
+
     item = {
         'id': content_id,
         'idea_id': idea.get('id', ''),
@@ -806,23 +750,23 @@ def create_pending_content(idea: Dict[str, Any]) -> Dict[str, Any]:
         'created_at': timestamp,
         'updated_at': timestamp
     }
-    
+
     table.put_item(Item=item)
     return item
 
 
-def update_content_status(content_id: str, status: str, generation_result: Dict[str, Any] = None) -> Dict[str, Any]:
+def update_content_status(content_id: str, status: str, generation_result: dict[str, Any] | None = None) -> dict[str, Any]:
     """Update content status after background generation."""
     table = dynamodb.Table(CONTENT_STUDIO_TABLE)
-    timestamp = datetime.utcnow().isoformat() + 'Z'
-    
+    timestamp = get_timestamp()
+
     update_expr = 'SET #status = :status, updated_at = :updated_at'
     expr_values = {
         ':status': status,
         ':updated_at': timestamp
     }
     expr_names = {'#status': 'status'}
-    
+
     if generation_result and status == 'generated':
         update_expr += ', generated_content = :content, raw_content = :raw, model = :model, competitor_sources_used = :sources'
         expr_values[':content'] = generation_result.get('content', {})
@@ -832,7 +776,7 @@ def update_content_status(content_id: str, status: str, generation_result: Dict[
     elif status == 'failed':
         update_expr += ', error_message = :error'
         expr_values[':error'] = generation_result.get('error', 'Unknown error') if generation_result else 'Unknown error'
-    
+
     try:
         table.update_item(
             Key={'id': content_id},
@@ -846,7 +790,7 @@ def update_content_status(content_id: str, status: str, generation_result: Dict[
         return {'success': False, 'error': str(e)}
 
 
-def mark_content_viewed(content_id: str) -> Dict[str, Any]:
+def mark_content_viewed(content_id: str) -> dict[str, Any]:
     """Mark content as viewed."""
     table = dynamodb.Table(CONTENT_STUDIO_TABLE)
     try:
@@ -860,7 +804,7 @@ def mark_content_viewed(content_id: str) -> Dict[str, Any]:
         return {'success': False, 'error': str(e)}
 
 
-def get_content_by_id(content_id: str) -> Dict[str, Any]:
+def get_content_by_id(content_id: str) -> dict[str, Any]:
     """Get a single content item by ID."""
     table = dynamodb.Table(CONTENT_STUDIO_TABLE)
     try:
@@ -871,26 +815,27 @@ def get_content_by_id(content_id: str) -> Dict[str, Any]:
         return None
 
 
-def get_content_history(limit: int = 20) -> List[Dict[str, Any]]:
+def get_content_history(limit: int = 20) -> list[dict[str, Any]]:
     """Get generated content history."""
     table = dynamodb.Table(CONTENT_STUDIO_TABLE)
     response = table.scan(Limit=limit)
     items = response.get('Items', [])
-    
+
     # Check for stuck items and mark them as failed
-    now = datetime.utcnow()
+    now = utc_now()
     for item in items:
         if item.get('status') in ('pending', 'generating'):
             created_at_str = item.get('created_at', '')
             if created_at_str:
                 try:
-                    created_at = datetime.fromisoformat(created_at_str.replace('Z', '+00:00')).replace(tzinfo=None)
+                    # Parse 'Z' suffix as UTC — result is timezone-aware, matches `now`.
+                    created_at = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
                     elapsed_seconds = (now - created_at).total_seconds()
                     if elapsed_seconds > GENERATION_TIMEOUT_SECONDS:
                         # Mark as failed due to timeout
                         update_content_status(
-                            item['id'], 
-                            'failed', 
+                            item['id'],
+                            'failed',
                             {'error': f'Generation timed out after {int(elapsed_seconds)} seconds. Please try again.'}
                         )
                         item['status'] = 'failed'
@@ -898,7 +843,7 @@ def get_content_history(limit: int = 20) -> List[Dict[str, Any]]:
                         logger.info(f"Marked content {item['id']} as failed due to timeout ({elapsed_seconds}s)")
                 except (ValueError, TypeError) as e:
                     logger.warning(f"Could not parse created_at for item {item.get('id')}: {e}")
-    
+
     # Sort by created_at descending
     items.sort(key=lambda x: x.get('created_at', ''), reverse=True)
     return items
@@ -920,7 +865,7 @@ def get_unviewed_count() -> int:
         return 0
 
 
-def delete_content(content_id: str) -> Dict[str, Any]:
+def delete_content(content_id: str) -> dict[str, Any]:
     """Delete generated content."""
     table = dynamodb.Table(CONTENT_STUDIO_TABLE)
     try:
@@ -930,29 +875,29 @@ def delete_content(content_id: str) -> Dict[str, Any]:
         return {'success': False, 'error': str(e)}
 
 
-def _get_ideas(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def _get_ideas(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """GET /content-studio/ideas - Get content ideas."""
     config = get_brand_config()
     ideas = generate_content_ideas(config)
     return success_response({
         'ideas': ideas,
         'total_count': len(ideas),
-        'generated_at': datetime.utcnow().isoformat() + 'Z'
+        'generated_at': get_timestamp()
     }, event)
 
 
-def _process_generation_async(content_id: str, idea: Dict[str, Any]) -> None:
+def _process_generation_async(content_id: str, idea: dict[str, Any]) -> None:
     """Process content generation - called asynchronously."""
     try:
         logger.info(f"Starting async generation for content_id={content_id}")
-        
+
         # Update status to generating
         update_content_status(content_id, 'generating')
-        
+
         # Get brand config and generate content
         config = get_brand_config()
         generation_result = generate_content(idea, config)
-        
+
         if generation_result.get('success'):
             update_content_status(content_id, 'generated', generation_result)
             logger.info(f"Generation completed successfully for content_id={content_id}")
@@ -969,22 +914,22 @@ def _process_generation_async(content_id: str, idea: Dict[str, Any]) -> None:
 @validate({
     'idea': {'required': True, 'source': 'body'}
 })
-def _generate_content(event: Dict[str, Any], context: Any, body: Dict, idea: Dict) -> Dict[str, Any]:
+def _generate_content(event: dict[str, Any], context: Any, body: dict, idea: dict) -> dict[str, Any]:
     """POST /content-studio/generate - Start async content generation."""
     if not idea.get('keyword'):
         return validation_error('idea must have a keyword', event, 'keyword')
-    
+
     # Input validation - limit keyword length
     if len(idea.get('keyword', '')) > 500:
         return validation_error('Keyword too long (max 500 characters)', event, 'keyword')
-    
+
     # Create pending record immediately
     pending_content = create_pending_content(idea)
     content_id = pending_content['id']
-    
+
     # Get the current function name for async invocation
     function_name = os.environ.get('AWS_LAMBDA_FUNCTION_NAME', '')
-    
+
     if function_name:
         # Invoke self asynchronously for background processing
         lambda_client = boto3.client('lambda')
@@ -1006,7 +951,7 @@ def _generate_content(event: Dict[str, Any], context: Any, body: Dict, idea: Dic
     else:
         # Local testing - run synchronously
         _process_generation_async(content_id, idea)
-    
+
     # Return immediately with pending status
     return success_response({
         'success': True,
@@ -1017,11 +962,11 @@ def _generate_content(event: Dict[str, Any], context: Any, body: Dict, idea: Dic
     }, event)
 
 
-def _get_content_status(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def _get_content_status(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """GET /content-studio/status/{id} - Get content generation status."""
     path_params = event.get('pathParameters') or {}
     path = event.get('path', '')
-    
+
     content_id = path_params.get('id')
     if not content_id:
         parts = path.rstrip('/').split('/')
@@ -1030,21 +975,22 @@ def _get_content_status(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             if part == 'status' and i + 1 < len(parts):
                 content_id = parts[i + 1]
                 break
-    
+
     if not content_id:
         return validation_error('Content ID is required', event, 'id')
-    
+
     content = get_content_by_id(content_id)
     if not content:
         return api_response(404, {'error': 'Content not found'}, event)
-    
+
     # Check for timeout on pending/generating items
     if content.get('status') in ('pending', 'generating'):
         created_at_str = content.get('created_at', '')
         if created_at_str:
             try:
-                now = datetime.utcnow()
-                created_at = datetime.fromisoformat(created_at_str.replace('Z', '+00:00')).replace(tzinfo=None)
+                now = utc_now()
+                # Parse 'Z' suffix as UTC — result is timezone-aware, matches `now`.
+                created_at = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
                 elapsed_seconds = (now - created_at).total_seconds()
                 if elapsed_seconds > GENERATION_TIMEOUT_SECONDS:
                     # Mark as failed due to timeout
@@ -1055,7 +1001,7 @@ def _get_content_status(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     logger.info(f"Marked content {content_id} as failed due to timeout ({elapsed_seconds}s)")
             except (ValueError, TypeError) as e:
                 logger.warning(f"Could not parse created_at for content {content_id}: {e}")
-    
+
     return success_response({
         'id': content_id,
         'status': content.get('status', 'unknown'),
@@ -1068,12 +1014,12 @@ def _get_content_status(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
 
 @parse_json_body
-def _mark_viewed(event: Dict[str, Any], context: Any, body: Dict) -> Dict[str, Any]:
+def _mark_viewed(event: dict[str, Any], context: Any, body: dict) -> dict[str, Any]:
     """POST /content-studio/viewed - Mark content as viewed."""
     content_id = body.get('id')
     if not content_id:
         return validation_error('Content ID is required', event, 'id')
-    
+
     result = mark_content_viewed(content_id)
     if result.get('success'):
         return success_response({'success': True, 'id': content_id}, event)
@@ -1084,7 +1030,7 @@ def _mark_viewed(event: Dict[str, Any], context: Any, body: Dict) -> Dict[str, A
 @validate({
     'limit': {'type': int, 'min': 1, 'max': 100, 'default': 20}
 })
-def _get_history(event: Dict[str, Any], context: Any, limit: int) -> Dict[str, Any]:
+def _get_history(event: dict[str, Any], context: Any, limit: int) -> dict[str, Any]:
     """GET /content-studio/history - Get generated content history."""
     history = get_content_history(limit)
     unviewed_count = get_unviewed_count()
@@ -1095,20 +1041,20 @@ def _get_history(event: Dict[str, Any], context: Any, limit: int) -> Dict[str, A
     }, event)
 
 
-def _delete_content(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def _delete_content(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """DELETE /content-studio/{id} - Delete generated content."""
     path_params = event.get('pathParameters') or {}
     path = event.get('path', '')
-    
+
     content_id = path_params.get('id')
     if not content_id:
         # Try to extract from path
         parts = path.rstrip('/').split('/')
         content_id = parts[-1] if parts else None
-    
+
     if not content_id or content_id in ['content-studio', 'api']:
         return validation_error('Content ID is required', event, 'id')
-    
+
     result = delete_content(content_id)
     return api_response(200 if result.get('success') else 404, result, event)
 
@@ -1122,15 +1068,15 @@ def _delete_content(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     ('GET', '/history'): _get_history,
     ('DELETE', None): _delete_content,
 })
-def _api_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def _api_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Internal API handler - routes are handled by decorators."""
     pass  # Routes handle everything
 
 
-def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """
     Lambda handler for Content Studio API.
-    
+
     Routes:
     - GET /content-studio/ideas - Get content ideas
     - POST /content-studio/generate - Start async content generation
@@ -1138,7 +1084,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     - POST /content-studio/viewed - Mark content as viewed
     - GET /content-studio/history - Get generated content history
     - DELETE /content-studio/{id} - Delete generated content
-    
+
     Also handles async invocation for background content generation.
     """
     # Check if this is an async generation invocation (not from API Gateway)
@@ -1153,6 +1099,6 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         else:
             logger.error("Invalid async generation event - missing content_id or idea")
             return {'statusCode': 400, 'body': 'Invalid async event'}
-    
+
     # For API Gateway requests, delegate to the decorated handler
     return _api_handler(event, context)
