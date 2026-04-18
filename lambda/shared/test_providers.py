@@ -21,8 +21,8 @@ from unittest.mock import MagicMock, patch
 # Load by bare name to avoid triggering shared/__init__.py's boto3 import.
 sys.path.insert(0, os.path.dirname(__file__))
 
-import providers  # type: ignore[import-not-found]  # noqa: E402
-from config import PROVIDERS  # type: ignore[import-not-found]  # noqa: E402
+import providers  # type: ignore[import-not-found]
+from config import PROVIDERS  # type: ignore[import-not-found]
 
 
 class TestGetEnabledProviderCount:

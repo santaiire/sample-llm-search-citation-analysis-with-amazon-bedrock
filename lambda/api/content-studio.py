@@ -29,6 +29,7 @@ sys.path.insert(0, '/opt/python')
 from decimal_utils import to_int
 from shared.api_response import api_response, success_response, validation_error
 from shared.decorators import api_handler, parse_json_body, route_handler, validate
+from shared.dynamodb_batch import query_latest_per_key
 from shared.models import BedrockInvocationError, ModelRole, get_model_tier, invoke_bedrock
 from shared.prompt_safety import untrusted_input_system_instruction, wrap_user_input
 from shared.utils import brand_names_match, extract_domain, get_brand_config, get_timestamp, utc_now
@@ -157,30 +158,32 @@ def _get_seasonal_suggestions(keywords: list[str], config: dict[str, Any]) -> li
 
 
 def get_crawled_content(urls: list[str], limit: int = 5) -> list[dict[str, Any]]:
-    """Get crawled content for competitor analysis."""
+    """Get crawled content for competitor analysis.
+
+    Queries are parallelized via ``shared.dynamodb_batch.query_latest_per_key``.
+    Wall-clock stays ~constant regardless of URL count instead of scaling
+    linearly (audit item 16).
+    """
     table = dynamodb.Table(CRAWLED_CONTENT_TABLE)
-    content_list = []
+    urls_slice = urls[:limit]
+    latest = query_latest_per_key(
+        table=table,
+        partition_key_name='normalized_url',
+        partition_values=urls_slice,
+    )
 
-    for url in urls[:limit]:
-        try:
-            response = table.query(
-                KeyConditionExpression=Key('normalized_url').eq(url),
-                Limit=1,
-                ScanIndexForward=False
-            )
-            items = response.get('Items', [])
-            if items:
-                item = items[0]
-                content_list.append({
-                    'url': url,
-                    'title': item.get('title', ''),
-                    'content_preview': item.get('content', '')[:2000] if item.get('content') else '',
-                    'seo_analysis': item.get('seo_analysis', {}),
-                    'domain': extract_domain(url)
-                })
-        except Exception as e:
-            logger.error(f"Error getting crawled content for {url}: {e}")
-
+    content_list: list[dict[str, Any]] = []
+    for url in urls_slice:
+        item = latest.get(url)
+        if not item:
+            continue
+        content_list.append({
+            'url': url,
+            'title': item.get('title', ''),
+            'content_preview': item.get('content', '')[:2000] if item.get('content') else '',
+            'seo_analysis': item.get('seo_analysis', {}),
+            'domain': extract_domain(url),
+        })
     return content_list
 
 

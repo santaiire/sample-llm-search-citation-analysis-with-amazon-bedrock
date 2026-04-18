@@ -25,6 +25,7 @@ sys.path.insert(0, '/opt/python')
 
 from shared.api_response import success_response
 from shared.decorators import api_handler, validate
+from shared.dynamodb_batch import query_latest_per_key
 from shared.utils import extract_domain, get_brand_config
 
 logger = logging.getLogger(__name__)
@@ -92,27 +93,39 @@ def is_first_party_domain(domain: str, config: dict[str, Any]) -> bool:
     return False
 
 
-def get_crawled_content_info(url: str) -> dict[str, Any]:
-    """Get SEO info from crawled content if available."""
-    try:
-        table = dynamodb.Table(CRAWLED_CONTENT_TABLE)
-        response = table.query(
-            KeyConditionExpression=Key('normalized_url').eq(url),
-            Limit=1,
-            ScanIndexForward=False  # Get most recent
-        )
-        items = response.get('Items', [])
-        if items:
-            item = items[0]
-            return {
-                'title': item.get('title', ''),
-                'seo_analysis': item.get('seo_analysis', {}),
-                'domain_authority': item.get('domain_authority'),
-                'last_crawled': item.get('crawled_at')
-            }
-    except Exception as e:
-        logger.error(f"Error getting crawled content: {e}")
-    return {}
+def _batch_crawled_info(urls: list[str]) -> dict[str, dict[str, Any]]:
+    """Fetch the latest CrawledContent row for each URL in parallel.
+
+    Returns a dict mapping each input URL to its shaped crawled-info
+    payload (only the fields consumed by `analyze_citation_gaps`).
+    Missing URLs get no entry so callers can safely `map.get(url, {})`.
+
+    Replaces the per-URL `get_crawled_content_info` call that used to
+    live inside `analyze_citation_gaps`'s loop (audit item 16).
+    Per-URL query failures are logged inside `query_latest_per_key`
+    and surface here as missing keys in the returned dict.
+    """
+    if not urls:
+        return {}
+
+    table = dynamodb.Table(CRAWLED_CONTENT_TABLE)
+    raw = query_latest_per_key(
+        table=table,
+        partition_key_name='normalized_url',
+        partition_values=urls,
+    )
+
+    shaped: dict[str, dict[str, Any]] = {}
+    for url, item in raw.items():
+        if not item:
+            continue
+        shaped[url] = {
+            'title': item.get('title', ''),
+            'seo_analysis': item.get('seo_analysis', {}),
+            'domain_authority': item.get('domain_authority'),
+            'last_crawled': item.get('crawled_at'),
+        }
+    return shaped
 
 
 def fuzzy_match_brand(brand_name: str, parent_company: str, tracked_list: list[str]) -> bool:
@@ -230,6 +243,16 @@ def analyze_citation_gaps(keyword: str, config: dict[str, Any]) -> dict[str, Any
     gaps = []
     covered_sources = []
 
+    # Batch-fetch crawled content for all relevant URLs up front. The
+    # previous per-URL query inside the loop was O(N) round-trips to
+    # DynamoDB (audit item 16); this collapses it to ~1 RTT worth of
+    # parallel work.
+    relevant_urls = [
+        url for url, data in source_brand_map.items()
+        if not is_first_party_domain(data['domain'], config)
+    ]
+    crawled_info_map = _batch_crawled_info(relevant_urls)
+
     for url, data in source_brand_map.items():
         domain = data['domain']
 
@@ -248,8 +271,8 @@ def analyze_citation_gaps(keyword: str, config: dict[str, Any]) -> dict[str, Any
             'competitor_brands': list(data['competitors'])
         }
 
-        # Get additional info from crawled content
-        crawled_info = get_crawled_content_info(url)
+        # Pull crawled info from the prefetched batch.
+        crawled_info = crawled_info_map.get(url, {})
         if crawled_info:
             source_info.update(crawled_info)
 
