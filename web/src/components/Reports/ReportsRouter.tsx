@@ -18,6 +18,10 @@ const KeywordDeepDiveReport = lazy(() =>
   import('./KeywordDeepDiveReport').then((m) => ({default: m.KeywordDeepDiveReport,})),
 );
 
+const ContentActionPlanReport = lazy(() =>
+  import('./ContentActionPlanReport').then((m) => ({default: m.ContentActionPlanReport,})),
+);
+
 interface Props {readonly keywords: ReadonlyArray<Keyword>;}
 
 function ReportFallback() {
@@ -52,6 +56,10 @@ export function ReportsRouter({ keywords }: Props) {
           <Route
             path="/reports/keyword/:keyword"
             element={<KeywordDeepDiveReport keywords={keywords} />}
+          />
+          <Route
+            path="/reports/content-action-plan"
+            element={<ContentActionPlanReport />}
           />
           <Route path="*" element={<Navigate to="/reports" replace />} />
         </Routes>

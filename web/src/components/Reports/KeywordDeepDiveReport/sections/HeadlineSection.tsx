@@ -3,7 +3,7 @@ import type {
   HistoricalTrendsResponse,
 } from '../../../../types';
 import { ReportSection } from '../../layout';
-import { SectionPlaceholder } from './SectionPlaceholder';
+import { SectionPlaceholder } from '../../layout/SectionPlaceholder';
 
 interface Props {
   readonly visibility: VisibilityMetricsResponse | null;

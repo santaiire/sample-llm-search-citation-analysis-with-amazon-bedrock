@@ -1,6 +1,6 @@
 import type { PersonaRankingsResponse } from '../../../../types';
 import { ReportSection } from '../../layout';
-import { SectionPlaceholder } from './SectionPlaceholder';
+import { SectionPlaceholder } from '../../layout/SectionPlaceholder';
 
 interface Props {
   readonly personas: PersonaRankingsResponse | null;
