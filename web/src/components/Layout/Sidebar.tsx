@@ -113,6 +113,17 @@ const ContentStudioIcon = () => (
   </svg>
 );
 
+/**
+ * Reporting section icon. A document with a chart line on it: signals that
+ * Reports take live dashboard data and arrange it into print-ready, shareable
+ * deliverables (the section's purpose).
+ */
+const ReportsIcon = () => (
+  <svg className="w-5 h-5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-6m3 6V7m3 10v-4M5 21h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2z" />
+  </svg>
+);
+
 export const Sidebar = ({
   activeTab, onTabChange, keywordsCount, schedulesCount, isRunning, isOpen, onToggle 
 }: SidebarProps) => {
@@ -201,6 +212,23 @@ export const Sidebar = ({
           label: 'Content Studio',
           icon: <ContentStudioIcon />,
           iconColor: 'text-teal-500',
+        },
+      ],
+    },
+    {
+      // Reporting groups print-ready deliverables (executive summary, keyword
+      // deep dives, competitor gaps, etc.) under one place. Each report uses
+      // the existing print-to-PDF infrastructure but presents the data in a
+      // narrative layout aimed at a marketing/exec audience rather than the
+      // operational dashboards above.
+      title: 'Reporting',
+      items: [
+        {
+          id: 'reports',
+          path: '/reports',
+          label: 'Reports',
+          icon: <ReportsIcon />,
+          iconColor: 'text-cyan-500',
         },
       ],
     },
