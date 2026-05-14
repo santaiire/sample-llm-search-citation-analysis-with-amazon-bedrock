@@ -12,11 +12,13 @@ import {
 import '@aws-amplify/ui-react/styles.css';
 import { useDashboardData } from './hooks/useDashboardData';
 import { useExecutionPolling } from './hooks/useExecutionPolling';
+import { usePrintMode } from './hooks/usePrintMode';
 import { Sidebar } from './components/Layout/Sidebar';
 import { TabContent } from './components/Layout/TabContent';
 import { ConfirmModal } from './components/ui/Modal';
 import { AboutModal } from './components/About';
 import { ThemeToggle } from './components/ui/ThemeToggle';
+import { PrintToPdfButton } from './components/ui/PrintToPdfButton';
 import { Spinner } from './components/ui/Spinner';
 import type {
   TabType, Schedule 
@@ -149,6 +151,10 @@ function MainApp() {
     execution, triggerAnalysis, startMonitoring, isRunning 
   } = useExecutionPolling(refetch);
 
+  // Print mode: when ?print=1 is in the URL we hide the sidebar/header chrome
+  // and auto-trigger the browser print dialog once data has loaded.
+  const { isPrintMode } = usePrintMode({ ready: !loading && Boolean(stats) });
+
   // Clear rawResponsesPath when navigating away from raw-responses
   useEffect(() => {
     if (location.pathname !== '/raw-responses') {
@@ -200,19 +206,31 @@ function MainApp() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <Sidebar
-        activeTab={activeTab}
-        onTabChange={handleTabChange}
-        keywordsCount={keywords.length}
-        schedulesCount={schedules.length}
-        isRunning={isRunning}
-        isOpen={sidebarOpen}
-        onToggle={() => setSidebarOpen(!sidebarOpen)}
-      />
+    <div className={`min-h-screen bg-gray-50 dark:bg-gray-900 ${isPrintMode ? 'print-mode' : ''}`}>
+      {!isPrintMode && (
+        <Sidebar
+          activeTab={activeTab}
+          onTabChange={handleTabChange}
+          keywordsCount={keywords.length}
+          schedulesCount={schedules.length}
+          isRunning={isRunning}
+          isOpen={sidebarOpen}
+          onToggle={() => setSidebarOpen(!sidebarOpen)}
+        />
+      )}
 
-      <main className="lg:ml-64 min-h-screen">
-        <header className="h-16 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 sm:px-6 lg:px-8 sticky top-0 z-10">
+      <main className={`${isPrintMode ? '' : 'lg:ml-64'} min-h-screen`}>
+        {isPrintMode ? (
+          <header className="px-4 sm:px-6 lg:px-8 py-4 border-b border-gray-200 dark:border-gray-700 print-header">
+            <h1 className="text-lg sm:text-xl font-semibold text-gray-900 dark:text-white">
+              {PAGE_TITLES[activeTab]}
+            </h1>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              {new Date().toLocaleString()}
+            </p>
+          </header>
+        ) : (
+          <header className="h-16 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 sm:px-6 lg:px-8 sticky top-0 z-10">
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="lg:hidden p-2 -ml-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
@@ -232,6 +250,7 @@ function MainApp() {
                 <span className="hidden sm:inline">Refreshing</span>
               </span>
             )}
+            <PrintToPdfButton />
             <ThemeToggle />
             <button
               onClick={async () => {
@@ -260,6 +279,7 @@ function MainApp() {
             </button>
           </div>
         </header>
+        )}
 
         <div className="p-4 sm:p-6 lg:p-8">
           <div className="max-w-7xl mx-auto">
