@@ -203,6 +203,30 @@ export class CitationAnalysisStack extends cdk.Stack {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // GSI: UrlIndex - Inverse index for "which keywords cite this URL?"
+    //
+    // The base table is keyed by (keyword, normalized_url) which makes the
+    // forward lookup ("citations for keyword X") cheap, but the reverse
+    // ("keywords that cite URL X") requires a full table scan. The
+    // get-url-breakdown handler used to scan SearchResults up to 5000 items
+    // to answer this. With this GSI, the same query is a bounded
+    // ``Query(normalized_url=X)`` against deduplicated rows.
+    //
+    // Projection is ALL because the breakdown endpoint needs
+    // citing_providers, citation_count, and last_updated alongside keyword.
+    citationsTable.addGlobalSecondaryIndex({
+      indexName: 'UrlIndex',
+      partitionKey: {
+        name: 'normalized_url',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'keyword',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     // DynamoDB Table: CrawledContent
     // Stores crawled page content and summaries
     const crawledContentTable = new dynamodb.Table(this, 'CrawledContentTable', {
