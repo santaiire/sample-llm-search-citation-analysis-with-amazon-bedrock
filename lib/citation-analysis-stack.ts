@@ -1141,6 +1141,7 @@ export class CitationAnalysisStack extends cdk.Stack {
         'get-citation-gaps.py',
         'get-recommendations.py',
         'get-historical-trends.py',
+        'get-reports-overview.py',
       ]),
       layers: [sharedLayer],
       timeout: cdk.Duration.seconds(60),
@@ -1737,6 +1738,17 @@ export class CitationAnalysisStack extends cdk.Stack {
 
     const trendsResource = apiResource.addResource('trends');
     trendsResource.addMethod('GET', new apigateway.LambdaIntegration(statsInsightsFunction, integrationOptions), methodOptions);
+
+    // Reports aggregator endpoints
+    // /reports/overview returns the cross-keyword executive-summary rollup
+    // (top movers, improving/declining counts, top recommendations) used
+    // by the Executive Summary print report and the Brand Visibility
+    // all-keywords variant. Routed to the consolidated stats-insights
+    // Lambda so it shares the same hot container as /trends and
+    // /recommendations (which it composes).
+    const reportsResource = apiResource.addResource('reports');
+    const reportsOverviewResource = reportsResource.addResource('overview');
+    reportsOverviewResource.addMethod('GET', new apigateway.LambdaIntegration(statsInsightsFunction, integrationOptions), methodOptions);
 
     // Persona Rankings API Route
     const personaRankingsResource = apiResource.addResource('persona-rankings');
