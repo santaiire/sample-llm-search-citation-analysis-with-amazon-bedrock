@@ -31,8 +31,8 @@ const REPORT_CATALOG: readonly ReportEntry[] = [
     description:
       'Visibility score, rank distribution, share of voice vs. configured competitors, sentiment, and trend, scoped to a keyword or to the full keyword set. Highlights regressions in red.',
     audience: 'Marketing lead',
-    path: null,
-    status: 'coming-soon',
+    path: '/reports/visibility',
+    status: 'available',
   },
   {
     id: 'competitor-gap',

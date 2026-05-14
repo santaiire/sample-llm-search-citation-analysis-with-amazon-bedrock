@@ -49,10 +49,16 @@ describe('ReportsLandingView', () => {
     expect(link).toHaveAttribute('href', '/reports/content-action-plan');
   });
 
-  it('marks the three unbuilt reports as Coming soon and not as links', () => {
+  it('renders Brand Visibility as a working link to /reports/visibility', () => {
+    renderLanding();
+    const link = screen.getByRole('link', { name: /brand visibility/i });
+    expect(link).toHaveAttribute('href', '/reports/visibility');
+  });
+
+  it('marks the two unbuilt reports as Coming soon and not as links', () => {
     renderLanding();
     const comingSoonBadges = screen.getAllByText(/coming soon/i);
-    expect(comingSoonBadges).toHaveLength(3);
+    expect(comingSoonBadges).toHaveLength(2);
   });
 
   it('shows the executive and marketing-lead audiences', () => {
