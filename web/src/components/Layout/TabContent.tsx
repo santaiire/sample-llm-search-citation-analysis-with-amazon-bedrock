@@ -3,6 +3,9 @@ import {
 } from 'react';
 import { ErrorBoundary } from '../ErrorBoundary';
 import { Spinner } from '../ui/Spinner';
+import {
+  SearchIcon, LinkIcon, GlobeIcon, KeyIcon 
+} from '../ui';
 import { StatCard } from '../Dashboard/StatCard';
 import { ProviderChart } from '../Dashboard/ProviderChart';
 import { BrandChart } from '../Dashboard/BrandChart';
@@ -66,10 +69,10 @@ function LazyTab({ children }: { readonly children: ReactNode }) {
 function DashboardStats({ stats }: { readonly stats: Stats | null }) {
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-6 sm:mb-8">
-      <StatCard title="Total Searches" value={stats?.total_searches ?? 0} icon="🔍" />
-      <StatCard title="Total Citations" value={stats?.total_citations ?? 0} icon="📎" />
-      <StatCard title="Pages Crawled" value={stats?.total_crawled ?? 0} icon="🕷️" />
-      <StatCard title="Unique Keywords" value={stats?.unique_keywords ?? 0} icon="🔑" />
+      <StatCard title="Total Searches" value={stats?.total_searches ?? 0} icon={<SearchIcon className="w-6 h-6" />} tone="blue" />
+      <StatCard title="Total Citations" value={stats?.total_citations ?? 0} icon={<LinkIcon className="w-6 h-6" />} tone="violet" />
+      <StatCard title="Pages Crawled" value={stats?.total_crawled ?? 0} icon={<GlobeIcon className="w-6 h-6" />} tone="emerald" />
+      <StatCard title="Unique Keywords" value={stats?.unique_keywords ?? 0} icon={<KeyIcon className="w-6 h-6" />} tone="amber" />
     </div>
   );
 }

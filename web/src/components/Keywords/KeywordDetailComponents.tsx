@@ -1,4 +1,5 @@
 import type { Search } from '../../types';
+import { ChevronDownIcon } from '../ui';
 
 export const providerColors: Record<string, {
   border: string;
@@ -274,7 +275,9 @@ export const SearchItem = ({
           >
             {search.citations?.length ?? 0} citations
           </span>
-          <span className="text-gray-400">{isExpanded ? '▼' : '▶'}</span>
+          <span className="text-gray-400" aria-hidden="true">
+            <ChevronDownIcon className={`w-4 h-4 ${isExpanded ? '' : '-rotate-90'}`} />
+          </span>
         </div>
       </div>
 
@@ -360,9 +363,13 @@ const ResponseSection = ({
             e.stopPropagation();
             setExpandedResponse(expandedResponse === globalIdx ? null : globalIdx);
           }}
-          className="mt-2 text-xs text-gray-500 hover:text-gray-700 font-medium"
+          className="mt-2 inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 font-medium"
+          aria-expanded={expandedResponse === globalIdx}
         >
-          {expandedResponse === globalIdx ? '▲ Show less' : '▼ Show full response'}
+          <ChevronDownIcon
+            className={`w-3 h-3 ${expandedResponse === globalIdx ? 'rotate-180' : ''}`}
+          />
+          {expandedResponse === globalIdx ? 'Show less' : 'Show full response'}
         </button>
       )}
     </div>

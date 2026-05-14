@@ -5,6 +5,7 @@ import type {
 import {
   formatResponse, extractUrls, findMentionPositions 
 } from '../ui/MarkdownProcessor';
+import { ChevronDownIcon } from '../ui';
 
 interface ProviderResponseCardProps {
   provider: ProviderBrandData;
@@ -69,9 +70,20 @@ const CitationsList = ({
         {urls.length > 5 && (
           <button
             onClick={onToggleShowAll}
-            className="text-xs text-gray-600 hover:text-gray-800 font-medium"
+            className="inline-flex items-center gap-1 text-xs text-gray-600 hover:text-gray-800 font-medium"
+            aria-expanded={showAll}
           >
-            {showAll ? '▲ Show Less' : `▼ Show ${urls.length - 5} More Citations`}
+            {showAll ? (
+              <>
+                <ChevronDownIcon className="w-3 h-3 rotate-180" />
+                Show Less
+              </>
+            ) : (
+              <>
+                <ChevronDownIcon className="w-3 h-3" />
+                Show {urls.length - 5} More Citations
+              </>
+            )}
           </button>
         )}
       </div>
@@ -169,7 +181,13 @@ const FeedbackSection = ({
       className={`w-full px-4 py-3 ${bgColor} transition-colors flex items-center justify-between`}
     >
       <span className={`text-sm font-medium ${titleColor}`}>{title}</span>
-      <span className="text-gray-600">{isExpanded ? '▲' : '▼'}</span>
+      <span className="text-gray-600" aria-hidden="true">
+        {isExpanded ? (
+          <ChevronDownIcon className="w-4 h-4 rotate-180" />
+        ) : (
+          <ChevronDownIcon className="w-4 h-4" />
+        )}
+      </span>
     </button>
     {isExpanded && (
       <div className="px-4 py-3 bg-white">
@@ -210,8 +228,19 @@ export const ProviderResponseCard = ({
           <button
             onClick={() => setIsExpanded(!isExpanded)}
             className="mt-4 text-sm text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
+            aria-expanded={isExpanded}
           >
-            {isExpanded ? '▲ Collapse' : '▼ Expand Full Response'}
+            {isExpanded ? (
+              <>
+                <ChevronDownIcon className="w-3 h-3 rotate-180" />
+                Collapse
+              </>
+            ) : (
+              <>
+                <ChevronDownIcon className="w-3 h-3" />
+                Expand Full Response
+              </>
+            )}
           </button>
         )}
 

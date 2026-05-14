@@ -4,6 +4,9 @@ import {
 import type { TopUrl } from '../../types';
 import { API_BASE_URL } from '../../infrastructure';
 import { exportToExcel } from '../../exporters/excelGenerator';
+import {
+  ChevronDownIcon, ChevronRightIcon 
+} from '../ui';
 
 interface TopCitationsTableProps {citations: TopUrl[];}
 
@@ -277,9 +280,16 @@ export const TopCitationsTable = ({ citations }: TopCitationsTableProps) => {
                     <td className="px-6 py-4 text-sm text-gray-900">
                       <button
                         onClick={() => toggleRow(idx, citation.url)}
-                        className="px-2 py-1 bg-blue-100 text-blue-800 rounded-full font-medium hover:bg-blue-200 cursor-pointer transition-colors"
+                        className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-800 rounded-full font-medium hover:bg-blue-200 cursor-pointer transition-colors"
+                        aria-expanded={isExpanded}
+                        aria-label={isExpanded ? 'Collapse breakdown' : 'Expand breakdown'}
                       >
-                        {citation.citation_count} {isExpanded ? '▼' : '▶'}
+                        {citation.citation_count}
+                        {isExpanded ? (
+                          <ChevronDownIcon className="w-3 h-3" />
+                        ) : (
+                          <ChevronRightIcon className="w-3 h-3" />
+                        )}
                       </button>
                     </td>
                   </tr>
