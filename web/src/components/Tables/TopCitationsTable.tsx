@@ -187,7 +187,7 @@ export const TopCitationsTable = ({ citations }: TopCitationsTableProps) => {
             <select
               value={itemsPerPage}
               onChange={(e) => handleItemsPerPageChange(Number(e.target.value))}
-              className="px-3 py-1 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="px-3 py-1 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900"
             >
               <option value={10}>10</option>
               <option value={20}>20</option>

@@ -46,11 +46,13 @@ export function FirstPartyBrandsSection({
       <p className="text-xs text-emerald-700 mb-3">Your brands to track. Click a brand to select it, then use "Expand" to discover sub-brands.</p>
       <div className="flex gap-2 mb-3">
         <input
+          id="new-first-party-brand"
           type="text"
           value={newBrand}
           onChange={(e) => onNewBrandChange(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && onAddBrand()}
           placeholder="Enter brand name..."
+          aria-label="New first party brand"
           className="flex-1 p-2 border border-emerald-300 rounded-lg focus:ring-2 focus:ring-emerald-500 bg-white text-sm"
         />
         <button onClick={onAddBrand} className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm">Add</button>

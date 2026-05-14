@@ -79,11 +79,13 @@ export function CompetitorBrandsSection({
       <p className="text-xs text-amber-700 mb-3">Click a competitor to select it, then use "Expand Brand" to discover their sub-brands.</p>
       <div className="flex gap-2 mb-3">
         <input
+          id="new-competitor-brand"
           type="text"
           value={newBrand}
           onChange={(e) => onNewBrandChange(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && onAddBrand()}
           placeholder="Enter competitor name..."
+          aria-label="New competitor brand"
           className="flex-1 p-2 border border-amber-300 rounded-lg focus:ring-2 focus:ring-amber-500 bg-white text-sm"
         />
         <button onClick={onAddBrand} className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors text-sm">Add</button>
