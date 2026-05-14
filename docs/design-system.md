@@ -47,8 +47,11 @@ Defined in `web/src/index.css`. Two groups: **neutral** and **accent**.
 | `bg-white`             | gray-800         |
 | `bg-gray-50`           | gray-900         |
 | `bg-gray-100`          | gray-700         |
+| `bg-gray-200`          | gray-600         |
 | `border-gray-200`      | gray-700         |
 | `border-gray-100`      | gray-700         |
+| `border-gray-300`      | gray-600         |
+| `hover:border-gray-300`| gray-500         |
 | `text-gray-900`        | gray-50          |
 | `text-gray-700`        | gray-300         |
 | `text-gray-600`        | gray-300         |
