@@ -247,7 +247,8 @@ convention:
 
 Available icons: `PauseIcon`, `PlayIcon`, `PencilIcon`, `TrashIcon`,
 `PlusIcon`, `CloseIcon`, `ChevronRightIcon`, `ChevronDownIcon`,
-`SearchIcon`, `LinkIcon`, `GlobeIcon`, `KeyIcon`, `WarningIcon`.
+`SearchIcon`, `LinkIcon`, `GlobeIcon`, `KeyIcon`, `WarningIcon`,
+`CheckIcon`, `ArrowRightIcon`.
 
 The sidebar (`Layout/Sidebar.tsx`) has a separate set of inline icons
 (`DashboardIcon`, `BrandIcon`, `CitationsIcon`, …). They follow the
@@ -294,8 +295,12 @@ Emoji are not used as UI affordances anywhere. Reasons:
 The only places emoji appear are decorative content **inside** the
 About section (`components/About/ArchitectureTab.tsx`,
 `components/About/LicensesTab.tsx`) where they label conceptual
-sections, not interactive controls. Treat that as the ceiling for
-emoji usage.
+sections, not interactive controls. There is also a single
+`✓` text suffix in `components/Brands/PromptEditor.tsx` inside a
+native `<select>` `<option>` – browsers will not render React
+components inside `<option>`, so a unicode glyph is the only viable
+choice there. Treat that as the ceiling for emoji / unicode-glyph
+usage.
 
 ---
 
@@ -409,6 +414,10 @@ design-system pass:
 | `Dashboard/StatCard.tsx` | `icon` prop typed as a `string` (emoji) and used as a key into an SVG lookup map – unrelated emoji silently fell back to a literal emoji render. | Refactored to take a `ReactNode` icon directly plus a `tone` prop (blue/violet/emerald/amber/gray). Call site `Layout/TabContent.tsx` updated to pass `SearchIcon`/`LinkIcon`/`GlobeIcon`/`KeyIcon`. |
 | `Tables/TopCitationsTable.tsx`, `Keywords/KeywordDetailComponents.tsx`, `Brands/ProviderResponseCard.tsx` | Unicode `▲▼▶` for expand/collapse. | Replaced with `ChevronDownIcon` / `ChevronRightIcon`, plus `aria-expanded` and `aria-label` on the controls. |
 | `Brands/BrandExpansionPanel.tsx` | `⚠️` emoji on duplicate-warning text. | Replaced with `WarningIcon`. |
+| `Brands/BrandMentionsTable.tsx` | `→` text arrow inside "View Details" button. | Replaced with `ArrowRightIcon` trailing the label. |
+| `Brands/CompetitorDiscoveryPanel.tsx` | `✓` text suffix on already-added competitor pills. | Replaced with `CheckIcon` rendered conditionally with `title="Already added"`. |
+| `Brands/ProviderResponseCard.tsx` | `🌍 Geographic Analysis` emoji prefix on a section header. | Removed; section title now reads "Geographic Analysis". |
+| `Keywords/KeywordDetailComponents.tsx` | `✕ Close` unicode multiplication-sign in the close button. | Replaced with `CloseIcon` leading the label. |
 
 ---
 

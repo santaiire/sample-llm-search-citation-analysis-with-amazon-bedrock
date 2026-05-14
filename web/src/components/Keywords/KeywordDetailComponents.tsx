@@ -1,5 +1,7 @@
 import type { Search } from '../../types';
-import { ChevronDownIcon } from '../ui';
+import {
+  ChevronDownIcon, CloseIcon 
+} from '../ui';
 
 export const providerColors: Record<string, {
   border: string;
@@ -201,9 +203,9 @@ export const DetailHeader = ({
     </div>
     <button
       onClick={onClose}
-      className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors text-sm shrink-0"
+      className="inline-flex items-center gap-1.5 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors text-sm shrink-0"
     >
-      ✕ Close
+      <CloseIcon className="w-3.5 h-3.5" />Close
     </button>
   </div>
 );
@@ -366,9 +368,7 @@ const ResponseSection = ({
           className="mt-2 inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 font-medium"
           aria-expanded={expandedResponse === globalIdx}
         >
-          <ChevronDownIcon
-            className={`w-3 h-3 ${expandedResponse === globalIdx ? 'rotate-180' : ''}`}
-          />
+          <ChevronDownIcon className={`w-3 h-3 ${expandedResponse === globalIdx ? 'rotate-180' : ''}`} />
           {expandedResponse === globalIdx ? 'Show less' : 'Show full response'}
         </button>
       )}

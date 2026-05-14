@@ -273,7 +273,7 @@ export const ProviderResponseCard = ({
         {/* GEO Feedback */}
         {provider.geo_feedback && (
           <FeedbackSection
-            title="🌍 Geographic Analysis"
+            title="Geographic Analysis"
             content={provider.geo_feedback}
             isExpanded={showGeoFeedback}
             onToggle={() => setShowGeoFeedback(!showGeoFeedback)}
