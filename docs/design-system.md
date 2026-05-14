@@ -38,7 +38,9 @@ There are two ways a Tailwind class can become "dark-mode aware":
 
 ### 1.2 Globally overridden classes
 
-Defined in `web/src/index.css`:
+Defined in `web/src/index.css`. Two groups: **neutral** and **accent**.
+
+#### 1.2.1 Neutral scale
 
 | Light class            | Dark replacement |
 | ---------------------- | ---------------- |
@@ -58,8 +60,36 @@ Defined in `web/src/index.css`:
 | `hover:bg-gray-200`    | gray-600         |
 | `input/textarea/select` background, border, placeholder, focus ring | gray-700/-600/-400/-500 |
 
-Markdown prose styles (`.prose-markdown`) and AWS Amplify Authenticator
-have their own dark overrides in the same file.
+#### 1.2.2 Accent surfaces, text, and borders
+
+The same global-override pattern is applied to every accent palette
+the app uses. The principle is: tinted surfaces become **translucent
+dark tints** and accent text shifts to the **`*-300` / `*-200`** shade
+that is legible on dark.
+
+| Light class                   | Dark behaviour |
+| ----------------------------- | -------------- |
+| `bg-{tone}-50`                | translucent dark tint (~25% alpha of `*-900`) |
+| `bg-{tone}-100`               | translucent dark tint (~40% alpha of `*-900`) |
+| `text-{tone}-700` / `-800`    | `*-300` (legible accent on dark) |
+| `text-{tone}-900`             | `*-200` (highest emphasis accent) |
+| `border-{tone}-100`           | translucent `*-800/-900` border (~40% alpha) |
+| `border-{tone}-200`           | translucent `*-700/-800` border (~55% alpha) |
+| `border-{tone}-300`           | translucent `*-600/-700` border (~70% alpha) |
+| `hover:bg-{tone}-100/-200`    | denser translucent tint (50–70% alpha) |
+
+Tones covered: `emerald`, `green`, `amber`, `yellow`, `violet`,
+`purple`, `fuchsia`, `blue`, `indigo`, `sky`, `cyan`, `teal`, `red`,
+`rose`, `orange`, `slate`. Alpha-modifier classes used in row
+backgrounds (`bg-green-50/30`, `bg-emerald-50/50`, `bg-red-50/30`,
+`bg-orange-50/30`) have their own matching dark-mode overrides.
+
+> **What is NOT overridden:** saturated solid surfaces
+> (`bg-{tone}-500/600/700`) and their `text-white` pairings. Those are
+> primary-action buttons that work in both themes as-is.
+
+Markdown prose styles (`.prose-markdown`) and AWS Amplify
+Authenticator have their own dark overrides in the same file.
 
 ### 1.3 CSS variables
 
@@ -94,27 +124,33 @@ utilities directly, not these variables.
 ### 2.2 Accent palette
 
 Accents are used sparingly: navigation icon tints, stat card badges,
-status pills, and feedback states.
+status pills, and feedback states. Each tone has a defined behaviour in
+both themes.
 
-| Tone    | Usage                            | Tailwind family |
-| ------- | -------------------------------- | --------------- |
-| Blue    | Searches, info, neutral metrics  | `blue-*`        |
-| Indigo  | Visibility metrics               | `indigo-*`      |
-| Violet  | Brand mentions, citation counts  | `violet-*`      |
-| Purple  | Citations                        | `purple-*`      |
-| Fuchsia | Prompt insights                  | `fuchsia-*`     |
-| Rose    | Citation gaps                    | `rose-*`        |
-| Emerald | Success, "you", crawled pages    | `emerald-*` / `green-*` |
-| Amber   | Warnings, keyword counts         | `amber-*` / `yellow-*` |
-| Red     | Errors, destructive actions      | `red-*`         |
-| Sky     | Recent searches                  | `sky-*`         |
-| Slate   | Raw responses, low emphasis      | `slate-*`       |
-| Teal    | Content studio                   | `teal-*`        |
-| Orange  | Schedule                         | `orange-*`      |
+| Tone    | Usage                            | Light surface        | Light text            | Dark surface (auto) | Dark text (auto) |
+| ------- | -------------------------------- | -------------------- | --------------------- | ------------------- | ---------------- |
+| Blue    | Searches, info, neutral metrics  | `bg-blue-50/100`     | `text-blue-700/800`   | translucent blue-900 | `blue-300`      |
+| Indigo  | Visibility metrics               | `bg-indigo-50/100`   | `text-indigo-700/800` | translucent indigo-900 | `indigo-300`  |
+| Violet  | Brand mentions                   | `bg-violet-50/100`   | `text-violet-700/800` | translucent violet-900 | `violet-300`  |
+| Purple  | Citations                        | `bg-purple-50/100`   | `text-purple-700/800` | translucent purple-900 | `purple-300`  |
+| Fuchsia | Prompt insights                  | `bg-fuchsia-50/100`  | `text-fuchsia-700/800` | translucent fuchsia-900 | `fuchsia-300` |
+| Rose    | Citation gaps                    | `bg-rose-50/100`     | `text-rose-700/800`   | translucent rose-900 | `rose-300`     |
+| Emerald | "Yours", success, crawled        | `bg-emerald-50/100`  | `text-emerald-700/800` | translucent emerald-900 | `emerald-300` |
+| Green   | Success, positive                | `bg-green-50/100`    | `text-green-700/800`  | translucent green-900 | `green-300`    |
+| Amber   | Warnings, competitors            | `bg-amber-50/100`    | `text-amber-700/800`  | translucent amber-900 | `amber-300`    |
+| Yellow  | Medium priority                  | `bg-yellow-50/100`   | `text-yellow-700/800` | translucent yellow-900 | `yellow-300`  |
+| Red     | Errors, destructive              | `bg-red-50/100`      | `text-red-700/800`    | translucent red-900 | `red-300`       |
+| Sky     | Recent searches                  | `bg-sky-50/100`      | `text-sky-700/800`    | translucent sky-900 | `sky-300`       |
+| Slate   | Raw responses, low emphasis      | `bg-slate-50/100`    | `text-slate-700/800`  | translucent slate-900 | `slate-300`   |
+| Teal    | Content studio                   | `bg-teal-50/100`     | `text-teal-700/800`   | translucent teal-900 | `teal-300`     |
+| Orange  | Schedule                         | `bg-orange-50/100`   | `text-orange-700/800` | translucent orange-900 | `orange-300` |
 
 Pattern for badges and pills: `bg-{tone}-50 text-{tone}-700`
 (`bg-{tone}-100` for stronger emphasis). Avoid mixing two accents in
 the same component.
+
+> Solid action buttons keep `bg-{tone}-600 text-white hover:bg-{tone}-700`
+> in both themes. Those classes are intentionally NOT overridden.
 
 ### 2.3 Semantic state colours
 
@@ -306,7 +342,52 @@ usage.
 
 ## 7. Components inventory
 
-### 7.1 Primitives (`components/ui/`)
+### 7.1 Pages and theme support
+
+Every route in `App.tsx` is listed below with its primary components
+and the light / dark mode coverage status. "✓ auto" means the page
+relies entirely on the global overrides described in §1.2 — no
+component-level `dark:` variants are needed and the page renders
+correctly in both themes.
+
+| # | Route | Page label | Primary components | Theme support |
+| - | ----- | ---------- | ------------------ | ------------- |
+| 1 | `/` | Dashboard | `Layout/TabContent`, `Dashboard/StatCard`, `Dashboard/ProviderChart`, `Dashboard/BrandChart`, `Tables/TopCitationsTable`, `Tables/RecentSearchesTable` | ✓ auto |
+| 2 | `/visibility` | Visibility | `Visibility/VisibilityDashboard`, `VisibilityComponents`, `PersonaComparisonChart`, `shared/PersonaSelector` | ✓ auto |
+| 3 | `/brands` | Brand Mentions | `Brands/BrandsView`, `BrandConfigContent`, `BrandConfigPanel`, `BrandTagList`, `DomainList`, `IndustrySelector`, `ExtractionOptions`, `BrandExpansionPanel`, `CompetitorDiscoveryPanel`, `FirstPartyBrandsSection`, `CompetitorBrandsSection`, `BrandMentionsTable`, `BrandOverviewTab`, `BrandDetailModal`, `ProviderResponseCard`, `PromptEditor` | ✓ auto (was the green-everywhere bug) |
+| 4 | `/citations` | Citations | `Citations/CitationsView`, `CitationFilters`, `CitationRow`, `CitationTableHeader`, `CitationDetailModal`, `CrawlHistory`, `PaginationControls` | ✓ auto |
+| 5 | `/prompt-insights` | Prompt Insights | `Insights/PromptInsights`, `PromptCard` | ✓ auto |
+| 6 | `/citation-gaps` | Citation Gaps | `Insights/CitationGaps`, `GapCard` | ✓ auto |
+| 7 | `/recommendations` | Action Center | `Insights/Recommendations` | ✓ auto |
+| 8 | `/keyword-research` | Keyword Research | `KeywordResearch/KeywordResearchView`, `KeywordExpansion`, `CompetitorAnalysis`, `CompetitorAnalysisComponents`, `ResearchHistory`, `KeywordResultsTable` | ✓ auto |
+| 9 | `/content-studio` | Content Studio | `ContentStudio/ContentStudioView`, `ContentGenerator`, `ContentHistory`, `ContentDetailModal`, `ContentIdeaCard`, `HistoryListItem`, `SelfReflection/SelfReflectionPanel` | ✓ auto |
+| 10 | `/searches` | Recent Searches | `Searches/SearchesView`, `SearchesViewComponents` | ✓ auto |
+| 11 | `/raw-responses` | Raw Responses | `RawResponses/RawResponsesExplorer`, `Breadcrumb`, `FileViewer`, `ImageViewer` | ✓ auto |
+| 12 | `/execution` | Run Analysis | `Execution/ExecutionMonitor`, `ExecutionStatus`, `ExecutionMonitorComponents`, `TriggerSection` | ✓ auto |
+| 13 | `/schedule` | Schedule | `Schedule/ScheduleManager` | ✓ auto |
+| 14 | `/settings` | Settings | `Settings/SettingsView`, `UsersConfig`, `UserModals`, `QueryPromptsManager` | ✓ auto |
+
+Modals and chrome:
+
+| Component | Coverage |
+| --------- | -------- |
+| `Layout/Sidebar` | explicit `dark:` variants (always-dark navigation rail) |
+| `App` header (sign out, about, theme toggle) | explicit `dark:` variants |
+| `ui/Modal` / `ConfirmModal` / `AlertModal` | explicit `dark:` variants on overlay + content |
+| `ui/Spinner` | `currentColor` – inherits theme |
+| `ui/ThemeToggle` | explicit `dark:` variants |
+| `ui/Button` | global override; `invertOnDark` flag for always-dark surfaces |
+| `About/AboutModal` and tabs | explicit `dark:` variants |
+| `ErrorBoundary` / `ErrorDisplay` | explicit `dark:` variants on always-dark fallback |
+| `main.tsx` `RootErrorFallback` | explicit `dark:` variants |
+
+> "✓ auto" pages do not need `dark:` variants on accent classes because
+> the global overrides handle them. If a page in the table changes its
+> mind and starts using a class that is **not** in §1.2, add the
+> override to `index.css` rather than sprinkling `dark:` variants
+> across components.
+
+### 7.2 Primitives (`components/ui/`)
 
 | Component       | Purpose |
 | --------------- | ------- |
@@ -317,14 +398,14 @@ usage.
 | `Icons.tsx`     | Shared SVG icon set. |
 | `MarkdownProcessor` | Helpers for rendering AI markdown safely. |
 
-### 7.2 Layout
+### 7.3 Layout
 
 `components/Layout/Sidebar.tsx` is the only navigation chrome. It owns
 nav sections, badges, and the "running" pulse indicator. New top-level
 features should be added there as a new entry, not as a new chrome
 component.
 
-### 7.3 Feature components
+### 7.4 Feature components
 
 Organised by feature folder under `components/<Feature>`. Each feature
 folder has an `index.ts` that re-exports its public surface. Internal
@@ -392,9 +473,17 @@ them.
 - [ ] No hard-coded hex colours. Use Tailwind tokens.
 - [ ] No mixed sizes in the same button group / list row.
 - [ ] No new `dark:` variants for classes already covered by the
-      global override (`bg-white`, `text-gray-900`, …).
+      global override – this includes neutrals (`bg-white`,
+      `text-gray-900`, …) **and accent tones** (`bg-emerald-50`,
+      `text-amber-800`, `border-blue-200`, …). If you find yourself
+      writing `dark:bg-emerald-900/20` or similar, add the override to
+      `index.css` instead so every accent surface gets it.
+- [ ] No accent surface inside an always-dark area without checking
+      that the global override matches the intent (e.g. status pills
+      inside the dark sidebar – those already have explicit `dark:`
+      treatment).
 - [ ] No `dark:` variants forgotten on always-dark surfaces (app rail,
-      fallback error screens).
+      fallback error screens, header chrome, modals).
 - [ ] No emoji-as-key prop signatures (e.g. `icon: '🔍'` mapping into
       a switch). Take a `ReactNode` icon component instead.
 - [ ] All new icons follow the stroke convention: 24 × 24 viewBox,
@@ -418,6 +507,7 @@ design-system pass:
 | `Brands/CompetitorDiscoveryPanel.tsx` | `✓` text suffix on already-added competitor pills. | Replaced with `CheckIcon` rendered conditionally with `title="Already added"`. |
 | `Brands/ProviderResponseCard.tsx` | `🌍 Geographic Analysis` emoji prefix on a section header. | Removed; section title now reads "Geographic Analysis". |
 | `Keywords/KeywordDetailComponents.tsx` | `✕ Close` unicode multiplication-sign in the close button. | Replaced with `CloseIcon` leading the label. |
+| **All accent-tinted surfaces (48 files, ~349 occurrences)** | Pages using `bg-{tone}-50/100`, `text-{tone}-700/800`, `border-{tone}-100/200/300` rendered as bright pale-tinted panels in dark mode. Most visible on `Settings > Brand Tracking`, where the stacked emerald + amber + violet panels turned the whole page green/yellow on a dark background. | Extended the `index.css` global override system to cover every accent tone: tinted surfaces become translucent dark tints, accent text shifts to `*-300/-200`, accent borders become muted translucent equivalents. Zero call-site changes – fixes all 48 files at once and any future accent surface gets the right behaviour automatically. |
 
 ---
 
