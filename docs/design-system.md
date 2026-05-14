@@ -468,6 +468,41 @@ conventions:
   first slices are `gray-900` / `gray-700`) need a light- and
   dark-mode palette. See `Dashboard/BrandChart.tsx` for the pattern.
 
+### 7.6 Images
+
+User-content images (website screenshots from the crawler, raw S3
+images) usually carry their own bright white-themed backgrounds.
+Without treatment they appear as harsh white slabs on the dark
+surface, even when the surrounding panel is correctly tinted.
+
+Apply the standard dim filter to `<img>` tags that render arbitrary
+captured content:
+
+```tsx
+<img
+  src={screenshotUrl}
+  alt="Screenshot of the cited page"
+  className="w-full border border-gray-300 rounded shadow-lg dark:brightness-90 dark:contrast-95"
+/>
+```
+
+`dark:brightness-90 dark:contrast-95` takes the edge off harsh whites
+without distorting brand colours in the screenshot. Apply it to:
+
+- `Citations/CitationDetailModal.tsx` – cited-page screenshots.
+- `Citations/CrawlHistory.tsx` – historical crawl screenshots.
+- `RawResponses/ImageViewer.tsx` – raw image objects in S3.
+
+Do NOT apply the filter to:
+
+- **Profile photos** of real people (e.g. the AboutTab portraits).
+  They are photos, not UI surfaces, and dimming looks unnatural.
+- **Logos / favicons** (`web/public/assets/favicon.ico`,
+  `Layout/Sidebar` brand mark). These already invert via Tailwind
+  classes (`bg-gray-900 dark:bg-white`).
+- **Decorative icons** – use the SVG icon set in
+  `components/ui/Icons.tsx` instead.
+
 ---
 
 ## 8. Forms
@@ -504,11 +539,18 @@ conventions:
 - App favicon: `web/public/assets/favicon.ico` (32×32 ICO).
 - App name: "Citation Analysis Dashboard" (`web/index.html` `<title>`).
 - Logo mark in sidebar: an inline bar-chart SVG inside an
-  `bg-gray-900 dark:bg-white` rounded square (32×32).
+  `bg-gray-900 dark:bg-white` rounded square (32×32). The fill colour
+  inverts so the mark stays high-contrast in both themes.
+- Profile portraits in the About tab (`web/public/assets/*.jpg`) are
+  photos and intentionally render unchanged in both themes – the
+  surrounding panel adapts via the global override.
 
 If a new favicon is needed, replace `favicon.ico` and add modern
 formats (`favicon.svg`, `apple-touch-icon.png`) referenced from
 `web/index.html`. Keep the silhouette legible at 16×16.
+
+For user-content images (screenshots, captured assets) see
+§7.6 Images for the dimming pattern.
 
 ---
 
@@ -565,6 +607,7 @@ design-system pass:
 | `Keywords/KeywordDetailComponents.tsx` | `✕ Close` unicode multiplication-sign in the close button. | Replaced with `CloseIcon` leading the label. |
 | **All accent-tinted surfaces (48 files, ~349 occurrences)** | Pages using `bg-{tone}-50/100`, `text-{tone}-700/800`, `border-{tone}-100/200/300` rendered as bright pale-tinted panels in dark mode. Most visible on `Settings > Brand Tracking`, where the stacked emerald + amber + violet panels turned the whole page green/yellow on a dark background. | Extended the `index.css` global override system to cover every accent tone: tinted surfaces become translucent dark tints, accent text shifts to `*-300/-200`, accent borders become muted translucent equivalents. Zero call-site changes – fixes all 48 files at once and any future accent surface gets the right behaviour automatically. |
 | **Chart.js canvases** (`Dashboard/ProviderChart`, `Dashboard/BrandChart`, `Visibility/PersonaComparisonChart`, `Keywords/KeywordDetail*`) | Canvases sit outside Tailwind's CSS so the global overrides do not reach them. Axis tick text, grid lines, legend, tooltip, and the neutral doughnut palette stayed in light-mode colours on dark, leaving labels invisible and the BrandChart's `gray-900` slice merging into the dark page. Charts also did not re-render when the user toggled the theme. | Added shared `components/ui/chartTheme.ts` (`getChartTheme(isDark)`) that returns axis tick / grid / tooltip colours per theme, wired all 4 chart components to call it via `useTheme()`, added `isDark` to the imperative chart `useEffect` deps so they re-render on theme toggle, and split out a per-mode dataset palette in `BrandChart`. Extracted `KeywordDetail` chart options into a sibling `KeywordDetailChartOptions.ts` to keep the components file under the 400-line cap. Test setup gained a `window.matchMedia` polyfill so components consuming `useTheme()` render in jsdom. |
+| **User-content images** (`Citations/CitationDetailModal`, `Citations/CrawlHistory`, `RawResponses/ImageViewer`) | Cited-page screenshots and raw S3 image objects carry their own bright white-themed backgrounds, so even with the surrounding panel correctly tinted dark they still appeared as harsh white slabs. | Added `dark:brightness-90 dark:contrast-95` to `<img>` tags rendering arbitrary captured content. Profile photos (About tab) and the inverting brand mark (sidebar) intentionally do **not** receive the filter – the rule only applies to user-supplied screenshots. Documented in design-system §7.6 Images. |
 
 ---
 
