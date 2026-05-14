@@ -396,6 +396,7 @@ Modals and chrome:
 | `Spinner`       | Loading indicator (`sm`/`md`/`lg`). |
 | `ThemeToggle`   | Light / dark / system theme switcher. |
 | `Icons.tsx`     | Shared SVG icon set. |
+| `chartTheme.ts` | `getChartTheme(isDark)` returns axis tick / grid / tooltip colours for Chart.js so canvases adapt to the theme. |
 | `MarkdownProcessor` | Helpers for rendering AI markdown safely. |
 
 ### 7.3 Layout
@@ -411,6 +412,58 @@ Organised by feature folder under `components/<Feature>`. Each feature
 folder has an `index.ts` that re-exports its public surface. Internal
 components keep `*.spec.tsx` next to the file. See
 `.kiro/steering/structure.md` for the layout map.
+
+### 7.5 Charts
+
+The app uses Chart.js (via `react-chartjs-2` for declarative usage and
+the imperative `Chart` constructor for the dashboard charts). Canvases
+do **not** participate in the global CSS override system, so chart
+chrome (axis ticks, grid, legend, tooltip) needs explicit theme-aware
+colours.
+
+Use the shared `getChartTheme(isDark)` helper from
+`components/ui/chartTheme.ts` together with the `useTheme` hook:
+
+```tsx
+import { useTheme } from '../../hooks/useTheme';
+import { getChartTheme } from '../ui/chartTheme';
+
+export function MyChart() {
+  const { isDark } = useTheme();
+  const theme = getChartTheme(isDark);
+
+  const options = {
+    plugins: {
+      legend: { labels: { color: theme.textColor } },
+      tooltip: {
+        backgroundColor: theme.tooltipBackground,
+        borderColor: theme.tooltipBorder,
+        titleColor: theme.tooltipText,
+        bodyColor: theme.tooltipText,
+      },
+    },
+    scales: {
+      x: { ticks: { color: theme.textColor }, grid: { color: theme.gridColor } },
+      y: { ticks: { color: theme.textColor }, grid: { color: theme.gridColor } },
+    },
+  };
+  // ...
+}
+```
+
+For imperative `new Chart(ctx, …)` usage, include `isDark` in the
+`useEffect` dependency array so the chart re-renders when the user
+toggles the theme.
+
+Dataset colours (the actual bars / slices / lines) follow these
+conventions:
+
+- **Saturated branded palettes** (e.g. `rgba(168, 85, 247, 0.5)` for
+  Claude) stay fixed across themes – they are saturated enough to read
+  on both backgrounds.
+- **Neutral data series** (e.g. the brand mentions doughnut whose
+  first slices are `gray-900` / `gray-700`) need a light- and
+  dark-mode palette. See `Dashboard/BrandChart.tsx` for the pattern.
 
 ---
 
@@ -508,6 +561,7 @@ design-system pass:
 | `Brands/ProviderResponseCard.tsx` | `🌍 Geographic Analysis` emoji prefix on a section header. | Removed; section title now reads "Geographic Analysis". |
 | `Keywords/KeywordDetailComponents.tsx` | `✕ Close` unicode multiplication-sign in the close button. | Replaced with `CloseIcon` leading the label. |
 | **All accent-tinted surfaces (48 files, ~349 occurrences)** | Pages using `bg-{tone}-50/100`, `text-{tone}-700/800`, `border-{tone}-100/200/300` rendered as bright pale-tinted panels in dark mode. Most visible on `Settings > Brand Tracking`, where the stacked emerald + amber + violet panels turned the whole page green/yellow on a dark background. | Extended the `index.css` global override system to cover every accent tone: tinted surfaces become translucent dark tints, accent text shifts to `*-300/-200`, accent borders become muted translucent equivalents. Zero call-site changes – fixes all 48 files at once and any future accent surface gets the right behaviour automatically. |
+| **Chart.js canvases** (`Dashboard/ProviderChart`, `Dashboard/BrandChart`, `Visibility/PersonaComparisonChart`, `Keywords/KeywordDetail*`) | Canvases sit outside Tailwind's CSS so the global overrides do not reach them. Axis tick text, grid lines, legend, tooltip, and the neutral doughnut palette stayed in light-mode colours on dark, leaving labels invisible and the BrandChart's `gray-900` slice merging into the dark page. Charts also did not re-render when the user toggled the theme. | Added shared `components/ui/chartTheme.ts` (`getChartTheme(isDark)`) that returns axis tick / grid / tooltip colours per theme, wired all 4 chart components to call it via `useTheme()`, added `isDark` to the imperative chart `useEffect` deps so they re-render on theme toggle, and split out a per-mode dataset palette in `BrandChart`. Extracted `KeywordDetail` chart options into a sibling `KeywordDetailChartOptions.ts` to keep the components file under the 400-line cap. Test setup gained a `window.matchMedia` polyfill so components consuming `useTheme()` render in jsdom. |
 
 ---
 

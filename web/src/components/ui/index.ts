@@ -7,6 +7,8 @@ export { Button } from './Button';
 export type {
   ButtonVariant, ButtonSize 
 } from './Button';
+export { getChartTheme } from './chartTheme';
+export type { ChartTheme } from './chartTheme';
 export {
   PauseIcon,
   PlayIcon,

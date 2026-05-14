@@ -10,6 +10,8 @@ import {
 import { Bar } from 'react-chartjs-2';
 import type { TooltipItem } from 'chart.js';
 import type { PersonaRankingsResponse } from '../../types';
+import { useTheme } from '../../hooks/useTheme';
+import { getChartTheme } from '../ui/chartTheme';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 
@@ -22,6 +24,9 @@ function computeAverageRank(brands: ReadonlyArray<{ rank: number }>): number | n
 }
 
 export function PersonaComparisonChart({ data }: PersonaComparisonChartProps) {
+  const { isDark } = useTheme();
+  const theme = getChartTheme(isDark);
+
   if (!data) return null;
 
   const personasWithResults = data.personas.filter((p) => p.brands.length > 0);
@@ -80,8 +85,16 @@ export function PersonaComparisonChart({ data }: PersonaComparisonChartProps) {
   const options = {
     responsive: true,
     plugins: {
-      legend: { position: 'top' as const },
+      legend: {
+        position: 'top' as const,
+        labels: { color: theme.textColor },
+      },
       tooltip: {
+        backgroundColor: theme.tooltipBackground,
+        borderColor: theme.tooltipBorder,
+        borderWidth: 1,
+        titleColor: theme.tooltipText,
+        bodyColor: theme.tooltipText,
         callbacks: {
           label(context: TooltipItem<'bar'>) {
             const personaIndex = context.dataIndex;
@@ -104,13 +117,19 @@ export function PersonaComparisonChart({ data }: PersonaComparisonChartProps) {
         title: {
           display: true,
           text: 'Average Brand Rank (lower is better)',
+          color: theme.textColor,
         },
+        ticks: { color: theme.textColor },
+        grid: { color: theme.gridColor },
       },
       x: {
         title: {
           display: true,
           text: 'Persona',
+          color: theme.textColor,
         },
+        ticks: { color: theme.textColor },
+        grid: { color: theme.gridColor },
       },
     },
   };

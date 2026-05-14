@@ -131,56 +131,9 @@ function buildCitationFrequency(citationByProvider: Record<string, Record<string
     .slice(0, 10);
 }
 
-export const lineChartOptions = {
-  responsive: true,
-  plugins: {
-    legend: {
-      display: true,
-      position: 'bottom' as const 
-    },
-    tooltip: {
-      callbacks: {
-        label: (context: {
-          dataset: { label?: string };
-          parsed: { y: number | null } 
-        }) =>
-          `${context.dataset.label ?? ''}: ${context.parsed.y ?? 0} citations`,
-      },
-    },
-  },
-  scales: { y: { beginAtZero: true } },
-};
-
-export const barChartOptions = {
-  responsive: true,
-  plugins: {
-    legend: {
-      display: true,
-      position: 'bottom' as const 
-    },
-    tooltip: {
-      callbacks: {
-        label: (context: {
-          dataset: { label?: string };
-          parsed: { y: number | null } 
-        }) =>
-          `${context.dataset.label ?? ''}: ${context.parsed.y ?? 0}`,
-        footer: (tooltipItems: Array<{ parsed: { y: number | null } }>) => {
-          const total = tooltipItems.reduce((sum, item) => sum + (item.parsed.y ?? 0), 0);
-          return `Total: ${total}`;
-        },
-      },
-    },
-  },
-  scales: {
-    x: { stacked: true },
-    y: {
-      stacked: true,
-      beginAtZero: true,
-      ticks: { stepSize: 1 } 
-    },
-  },
-};
+export {
+  lineChartOptions, barChartOptions
+} from './KeywordDetailChartOptions';
 
 interface DetailHeaderProps {
   keyword: string;

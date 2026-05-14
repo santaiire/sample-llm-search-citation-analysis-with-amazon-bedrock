@@ -6,6 +6,8 @@ import {
 } from '../../infrastructure';
 import type { Search } from '../../types';
 import { Spinner } from '../ui/Spinner';
+import { useTheme } from '../../hooks/useTheme';
+import { getChartTheme } from '../ui/chartTheme';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -167,18 +169,22 @@ interface ChartsSectionProps {
 
 const ChartsSection = ({
   lineChartData, barChartData 
-}: ChartsSectionProps) => (
-  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
-    <div className="bg-gray-50 p-3 sm:p-4 rounded-lg">
-      <h3 className="font-semibold text-gray-900 mb-4 text-sm sm:text-base">Citations Trend</h3>
-      <Line data={lineChartData} options={lineChartOptions} />
+}: ChartsSectionProps) => {
+  const { isDark } = useTheme();
+  const theme = getChartTheme(isDark);
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+      <div className="bg-gray-50 p-3 sm:p-4 rounded-lg">
+        <h3 className="font-semibold text-gray-900 mb-4 text-sm sm:text-base">Citations Trend</h3>
+        <Line data={lineChartData} options={lineChartOptions(theme)} />
+      </div>
+      <div className="bg-gray-50 p-3 sm:p-4 rounded-lg">
+        <h3 className="font-semibold text-gray-900 mb-4 text-sm sm:text-base">Top 10 Citations</h3>
+        <Bar data={barChartData} options={barChartOptions(theme)} />
+      </div>
     </div>
-    <div className="bg-gray-50 p-3 sm:p-4 rounded-lg">
-      <h3 className="font-semibold text-gray-900 mb-4 text-sm sm:text-base">Top 10 Citations</h3>
-      <Bar data={barChartData} options={barChartOptions} />
-    </div>
-  </div>
-);
+  );
+};
 
 interface RunHistoryProps {
   runBatches: Record<string, Search[]>;

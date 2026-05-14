@@ -5,14 +5,33 @@ import {
   Chart, registerables 
 } from 'chart.js';
 import type { BrandStat } from '../../types';
+import { useTheme } from '../../hooks/useTheme';
+import { getChartTheme } from '../ui/chartTheme';
 
 Chart.register(...registerables);
 
 interface BrandChartProps {data: BrandStat[];}
 
+const BRAND_PALETTE_LIGHT = [
+  'rgba(17, 24, 39, 0.9)',
+  'rgba(55, 65, 81, 0.9)',
+  'rgba(251, 191, 36, 0.85)',
+  'rgba(167, 139, 250, 0.85)',
+  'rgba(156, 163, 175, 0.9)',
+];
+
+const BRAND_PALETTE_DARK = [
+  'rgba(229, 231, 235, 0.9)',
+  'rgba(156, 163, 175, 0.9)',
+  'rgba(251, 191, 36, 0.85)',
+  'rgba(167, 139, 250, 0.85)',
+  'rgba(107, 114, 128, 0.9)',
+];
+
 export const BrandChart = ({ data }: BrandChartProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
+  const { isDark } = useTheme();
 
   useEffect(() => {
     if (!canvasRef.current || !data?.length) return;
@@ -24,8 +43,8 @@ export const BrandChart = ({ data }: BrandChartProps) => {
     const ctx = canvasRef.current.getContext('2d');
     if (!ctx) return;
 
-    const isDark = document.documentElement.classList.contains('dark');
-    const textColor = isDark ? 'rgb(209, 213, 219)' : 'rgb(75, 85, 99)';
+    const theme = getChartTheme(isDark);
+    const palette = isDark ? BRAND_PALETTE_DARK : BRAND_PALETTE_LIGHT;
 
     chartRef.current = new Chart(ctx, {
       type: 'doughnut',
@@ -34,13 +53,7 @@ export const BrandChart = ({ data }: BrandChartProps) => {
         datasets: [
           {
             data: data.map((d) => d.mention_count),
-            backgroundColor: [
-              'rgba(17, 24, 39, 0.9)',
-              'rgba(55, 65, 81, 0.9)',
-              'rgba(251, 191, 36, 0.85)',
-              'rgba(167, 139, 250, 0.85)',
-              'rgba(156, 163, 175, 0.9)',
-            ],
+            backgroundColor: palette,
             borderWidth: 0,
           },
         ],
@@ -56,8 +69,15 @@ export const BrandChart = ({ data }: BrandChartProps) => {
               boxWidth: 12,
               padding: 16,
               font: { size: 11 },
-              color: textColor,
+              color: theme.textColor,
             },
+          },
+          tooltip: {
+            backgroundColor: theme.tooltipBackground,
+            borderColor: theme.tooltipBorder,
+            borderWidth: 1,
+            titleColor: theme.tooltipText,
+            bodyColor: theme.tooltipText,
           },
         },
       },
@@ -68,7 +88,7 @@ export const BrandChart = ({ data }: BrandChartProps) => {
         chartRef.current.destroy();
       }
     };
-  }, [data]);
+  }, [data, isDark]);
 
   const hasData = data && data.length > 0;
 
