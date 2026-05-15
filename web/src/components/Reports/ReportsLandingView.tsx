@@ -40,8 +40,8 @@ const REPORT_CATALOG: readonly ReportEntry[] = [
     description:
       'For each tracked competitor: keywords where they outrank you, citation sources unique to them, and a prioritized outreach list ranked by potential visibility lift.',
     audience: 'Content / PR strategist',
-    path: null,
-    status: 'coming-soon',
+    path: '/reports/competitor',
+    status: 'available',
   },
   {
     id: 'content-action-plan',

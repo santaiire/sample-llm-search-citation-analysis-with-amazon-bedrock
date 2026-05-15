@@ -30,6 +30,10 @@ const ExecutiveSummaryReport = lazy(() =>
   import('./ExecutiveSummaryReport').then((m) => ({default: m.ExecutiveSummaryReport,})),
 );
 
+const CompetitorGapReport = lazy(() =>
+  import('./CompetitorGapReport').then((m) => ({default: m.CompetitorGapReport,})),
+);
+
 interface Props {readonly keywords: ReadonlyArray<Keyword>;}
 
 function ReportFallback() {
@@ -80,6 +84,14 @@ export function ReportsRouter({ keywords }: Props) {
           <Route
             path="/reports/executive-summary"
             element={<ExecutiveSummaryReport />}
+          />
+          <Route
+            path="/reports/competitor"
+            element={<CompetitorGapReport />}
+          />
+          <Route
+            path="/reports/competitor/:competitor"
+            element={<CompetitorGapReport />}
           />
           <Route path="*" element={<Navigate to="/reports" replace />} />
         </Routes>

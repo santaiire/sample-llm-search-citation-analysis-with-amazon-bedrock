@@ -4,3 +4,4 @@ export { KeywordDeepDiveReport } from './KeywordDeepDiveReport';
 export { ContentActionPlanReport } from './ContentActionPlanReport';
 export { BrandVisibilityReport } from './BrandVisibilityReport';
 export { ExecutiveSummaryReport } from './ExecutiveSummaryReport';
+export { CompetitorGapReport } from './CompetitorGapReport';
