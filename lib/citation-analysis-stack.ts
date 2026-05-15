@@ -387,6 +387,29 @@ export class CitationAnalysisStack extends cdk.Stack {
       timeToLiveAttribute: 'ttl',
     });
 
+    // DynamoDB Table: RecommendationStatus
+    // Tracks the action-tracking lifecycle (new -> in_progress -> done /
+    // wontfix) for individual recommendations produced by
+    // get-recommendations.py. The recommendations themselves aren't
+    // persisted -- they're regenerated on every API call -- so this
+    // table is the only durable record of which items have been worked
+    // on. PK is a deterministic SHA-1 hash of the recommendation's
+    // type + title + sorted keywords (see shared.utils.recommendation_id).
+    // 90-day TTL evicts abandoned items so the table doesn't grow
+    // unbounded for one-off recommendations that never get triaged.
+    const recommendationStatusTable = new dynamodb.Table(this, 'RecommendationStatusTable', {
+      tableName: 'CitationAnalysis-RecommendationStatus',
+      partitionKey: {
+        name: 'recommendation_id',
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      timeToLiveAttribute: 'ttl',
+    });
+
     // ========================================
     // Secrets Manager - API Keys
     // ========================================
@@ -1196,6 +1219,7 @@ export class CitationAnalysisStack extends cdk.Stack {
         'get-recommendations.py',
         'get-historical-trends.py',
         'get-reports-overview.py',
+        'recommendation-status.py',
       ]),
       layers: [sharedLayer],
       timeout: cdk.Duration.seconds(60),
@@ -1217,6 +1241,9 @@ export class CitationAnalysisStack extends cdk.Stack {
         KEYWORDS_TABLE: keywordsTable.tableName,
         PROVIDER_CONFIG_TABLE: providerConfigTable.tableName,
         ...bedrockTierEnv,
+        // recommendation status (read for left-join, write for the
+        // POST /recommendations/{id}/status route)
+        RECOMMENDATION_STATUS_TABLE: recommendationStatusTable.tableName,
       },
     });
 
@@ -1369,6 +1396,10 @@ export class CitationAnalysisStack extends cdk.Stack {
     keywordsTable.grantReadData(statsInsightsFunction);
     brandConfigTable.grantReadData(statsInsightsFunction);
     providerConfigTable.grantReadData(statsInsightsFunction);
+    // The same Lambda serves both GET /recommendations (read-only join)
+    // and POST /recommendations/{id}/status (write upsert), so it
+    // needs read-write on the status table.
+    recommendationStatusTable.grantReadWriteData(statsInsightsFunction);
     // Grant Bedrock access for LLM-enhanced recommendations (get-recommendations.py)
     statsInsightsFunction.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
@@ -1809,6 +1840,16 @@ export class CitationAnalysisStack extends cdk.Stack {
 
     const recommendationsResource = apiResource.addResource('recommendations');
     recommendationsResource.addMethod('GET', new apigateway.LambdaIntegration(statsInsightsFunction, integrationOptions), methodOptions);
+
+    // POST /recommendations/{id}/status — set the action-tracking state
+    // (new / in_progress / done / wontfix) for a given recommendation.
+    // GET /recommendations/{id}/status — read the current state.
+    // Both routed to the consolidated stats-insights Lambda which loads
+    // recommendation-status.py via the ROUTE_MAP prefix match.
+    const recommendationIdResource = recommendationsResource.addResource('{id}');
+    const recommendationStatusResource = recommendationIdResource.addResource('status');
+    recommendationStatusResource.addMethod('GET', new apigateway.LambdaIntegration(statsInsightsFunction, integrationOptions), methodOptions);
+    recommendationStatusResource.addMethod('POST', new apigateway.LambdaIntegration(statsInsightsFunction, integrationOptions), methodOptions);
 
     const trendsResource = apiResource.addResource('trends');
     trendsResource.addMethod('GET', new apigateway.LambdaIntegration(statsInsightsFunction, integrationOptions), methodOptions);
