@@ -35,7 +35,8 @@ from typing import Any, Callable, Dict, List
 sys.path.insert(0, '/opt/python')
 
 from shared.api_response import success_response
-from shared.decorators import api_handler, require_config, validate
+from shared.decorators import api_handler, validate
+from shared.utils import get_brand_config
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -206,15 +207,14 @@ def build_overview(
     'days': {'type': int, 'min': 1, 'max': 365, 'default': 30},
     'top': {'type': int, 'min': 1, 'max': 10, 'default': 3},
 })
-@require_config
 def handler(
     event: Dict[str, Any],
     context: Any,
-    config: Dict[str, Any],
     period: str = 'day',
     days: int = 30,
     top: int = 3,
 ) -> Dict[str, Any]:
     """API handler for GET /api/reports/overview."""
+    config = get_brand_config()
     payload = build_overview(config, period=period, days=days, top=top)
     return success_response(payload, event)
