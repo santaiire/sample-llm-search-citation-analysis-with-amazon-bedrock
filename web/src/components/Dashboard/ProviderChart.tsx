@@ -5,6 +5,8 @@ import {
   Chart, registerables 
 } from 'chart.js';
 import type { ProviderStat } from '../../types';
+import { useTheme } from '../../hooks/useTheme';
+import { getChartTheme } from '../ui/chartTheme';
 
 Chart.register(...registerables);
 
@@ -13,6 +15,7 @@ interface ProviderChartProps {data: ProviderStat[];}
 export const ProviderChart = ({ data }: ProviderChartProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
+  const { isDark } = useTheme();
 
   useEffect(() => {
     if (!canvasRef.current || !data?.length) return;
@@ -24,9 +27,7 @@ export const ProviderChart = ({ data }: ProviderChartProps) => {
     const ctx = canvasRef.current.getContext('2d');
     if (!ctx) return;
 
-    const isDark = document.documentElement.classList.contains('dark');
-    const textColor = isDark ? 'rgb(209, 213, 219)' : 'rgb(75, 85, 99)';
-    const gridColor = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.05)';
+    const theme = getChartTheme(isDark);
 
     chartRef.current = new Chart(ctx, {
       type: 'bar',
@@ -49,16 +50,25 @@ export const ProviderChart = ({ data }: ProviderChartProps) => {
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: {legend: { display: false },},
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: theme.tooltipBackground,
+            borderColor: theme.tooltipBorder,
+            borderWidth: 1,
+            titleColor: theme.tooltipText,
+            bodyColor: theme.tooltipText,
+          },
+        },
         scales: {
           y: {
             beginAtZero: true,
-            grid: { color: gridColor },
-            ticks: { color: textColor },
+            grid: { color: theme.gridColor },
+            ticks: { color: theme.textColor },
           },
           x: {
             grid: { display: false },
-            ticks: { color: textColor },
+            ticks: { color: theme.textColor },
           },
         },
       },
@@ -69,7 +79,7 @@ export const ProviderChart = ({ data }: ProviderChartProps) => {
         chartRef.current.destroy();
       }
     };
-  }, [data]);
+  }, [data, isDark]);
 
   const hasData = data && data.length > 0;
 

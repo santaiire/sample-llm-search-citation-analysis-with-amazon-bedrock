@@ -1,0 +1,50 @@
+{
+  "captcha": [
+    "captcha",
+    "verify you are human",
+    "verification required",
+    "prove you are not a robot",
+    "security check",
+    "challenge-platform",
+    "recaptcha",
+    "hcaptcha",
+    "slider verification",
+    "slide right to secure",
+    "slide to verify",
+    "unusual activity",
+    "automated (bot) activity",
+    "we detected unusual activity"
+  ],
+  "access_denied": [
+    "access denied",
+    "403 forbidden",
+    "you have been blocked",
+    "request blocked",
+    "access to this page has been denied",
+    "your access has been blocked"
+  ],
+  "rate_limited": [
+    "too many requests",
+    "rate limit",
+    "slow down",
+    "try again later",
+    "request limit exceeded",
+    "429"
+  ],
+  "geo_blocked": [
+    "not available in your region",
+    "not available in your country",
+    "geo-restricted",
+    "content not available",
+    "this content is not available in your location"
+  ],
+  "login_required": [
+    "please log in",
+    "please sign in",
+    "login required",
+    "sign in to continue",
+    "create an account",
+    "members only",
+    "subscription required"
+  ]
+}

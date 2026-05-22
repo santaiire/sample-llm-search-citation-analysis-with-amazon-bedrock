@@ -18,7 +18,7 @@ import sys
 sys.path.insert(0, '/opt/python')
 
 from shared.api_response import not_found_response
-from shared.router import HandlerLoader
+from shared.router import HandlerLoader, path_matches_route
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -31,6 +31,7 @@ ROUTE_MAP = {
     '/api/citation-gaps': 'get-citation-gaps.py',
     '/api/recommendations': 'get-recommendations.py',
     '/api/trends': 'get-historical-trends.py',
+    '/api/reports/overview': 'get-reports-overview.py',
 }
 
 _handlers = HandlerLoader(__file__)
@@ -48,7 +49,7 @@ def handler(event, context):
 
     # Try resource first (API Gateway template path), then fall back to actual path
     for route_path, filename in ROUTE_MAP.items():
-        if resource.startswith(route_path) or path.startswith(route_path):
+        if path_matches_route(route_path, resource, path):
             logger.info(f"Matched route {route_path} -> {filename}")
             return _handlers.get(filename)(event, context)
 

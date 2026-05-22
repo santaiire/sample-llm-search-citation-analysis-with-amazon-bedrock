@@ -1,4 +1,5 @@
 import type { CompetitorDiscoveryResult } from '../../hooks/useBrandConfig';
+import { CheckIcon } from '../ui';
 
 interface CompetitorDiscoveryPanelProps {
   readonly result: CompetitorDiscoveryResult;
@@ -51,9 +52,10 @@ export const CompetitorDiscoveryPanel = ({
               key={brand}
               onClick={() => !isAlreadyAdded && onToggleBrand(brand)}
               disabled={isAlreadyAdded}
-              className={`px-3 py-1 rounded-full text-sm transition-colors ${getButtonClass(brand)}`}
+              className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm transition-colors ${getButtonClass(brand)}`}
             >
-              {isAlreadyAdded ? `${brand} ✓` : brand}
+              {brand}
+              {isAlreadyAdded && <CheckIcon className="w-3.5 h-3.5" title="Already added" />}
             </button>
           );
         })}

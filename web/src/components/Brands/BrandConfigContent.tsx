@@ -110,7 +110,7 @@ export const BrandConfigContent = ({
             <div className="bg-violet-50 rounded-lg p-4 border border-violet-200">
               <h3 className="text-sm font-semibold text-violet-800 mb-2">Custom Entity Types</h3>
               <div className="flex gap-2 mb-3">
-                <input type="text" value={inputs.newEntityType} onChange={(e) => setNewEntityType(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addEntityType()} placeholder="Enter entity type..." className="flex-1 p-2 border border-violet-300 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white text-sm" />
+                <input type="text" id="new-entity-type" value={inputs.newEntityType} onChange={(e) => setNewEntityType(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addEntityType()} placeholder="Enter entity type..." aria-label="New custom entity type" className="flex-1 p-2 border border-violet-300 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white text-sm" />
                 <button onClick={addEntityType} className="px-4 py-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700 transition-colors text-sm">Add</button>
               </div>
               <div className="flex flex-wrap gap-2">

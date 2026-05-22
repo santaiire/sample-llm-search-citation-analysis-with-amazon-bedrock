@@ -19,6 +19,25 @@ import * as fs from 'fs';
 import { Auth } from './constructs/auth';
 
 /**
+ * Bedrock model tier defaults per task role.
+ *
+ * Tiers map to model families in lambda/shared/models.py:
+ *   fast     -> Haiku
+ *   balanced -> Sonnet
+ *   deep     -> Opus
+ *
+ * Lambdas read BEDROCK_TIER_<ROLE> and resolve the model ID via
+ * shared.models.get_model_id(). To pin a specific model ID in an incident,
+ * set BEDROCK_MODEL_<ROLE> (takes precedence over the tier).
+ */
+const bedrockTierEnv = {
+  BEDROCK_TIER_SUMMARIZATION: 'fast',
+  BEDROCK_TIER_EXTRACTION:    'fast',
+  BEDROCK_TIER_GENERATION:    'fast',
+  BEDROCK_TIER_ANALYSIS:      'balanced',
+} as const;
+
+/**
  * Creates optimized Lambda code bundle containing only the specific handler file
  * plus shared utilities (decimal_utils.py). This reduces deployment package size
  * and improves cold start times compared to bundling all API handlers together.
@@ -180,6 +199,30 @@ export class CitationAnalysisStack extends cdk.Stack {
       sortKey: {
         name: 'citation_count',
         type: dynamodb.AttributeType.NUMBER,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // GSI: UrlIndex - Inverse index for "which keywords cite this URL?"
+    //
+    // The base table is keyed by (keyword, normalized_url) which makes the
+    // forward lookup ("citations for keyword X") cheap, but the reverse
+    // ("keywords that cite URL X") requires a full table scan. The
+    // get-url-breakdown handler used to scan SearchResults up to 5000 items
+    // to answer this. With this GSI, the same query is a bounded
+    // ``Query(normalized_url=X)`` against deduplicated rows.
+    //
+    // Projection is ALL because the breakdown endpoint needs
+    // citing_providers, citation_count, and last_updated alongside keyword.
+    citationsTable.addGlobalSecondaryIndex({
+      indexName: 'UrlIndex',
+      partitionKey: {
+        name: 'normalized_url',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'keyword',
+        type: dynamodb.AttributeType.STRING,
       },
       projectionType: dynamodb.ProjectionType.ALL,
     });
@@ -676,6 +719,8 @@ export class CitationAnalysisStack extends cdk.Stack {
       description: 'Parse keywords from S3 or direct input',
       logGroup: parseKeywordsLogGroup,
       environment: {
+        // Audit #12 canonical name + legacy for in-flight rollouts.
+        DYNAMODB_TABLE_KEYWORDS: keywordsTable.tableName,
         KEYWORDS_TABLE: keywordsTable.tableName,
       },
     });
@@ -705,9 +750,13 @@ export class CitationAnalysisStack extends cdk.Stack {
       environment: {
         DYNAMODB_TABLE_SEARCH_RESULTS: searchResultsTable.tableName,
         DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName,
+        // Canonical name (audit #12). Legacy PROVIDER_CONFIG_TABLE kept for
+        // in-flight deploys; can be dropped after one full rollout.
+        DYNAMODB_TABLE_PROVIDER_CONFIG: providerConfigTable.tableName,
+        PROVIDER_CONFIG_TABLE: providerConfigTable.tableName,
         SECRETS_PREFIX: 'citation-analysis/',
         RAW_RESPONSES_BUCKET: rawResponsesBucket.bucketName,
-        PROVIDER_CONFIG_TABLE: providerConfigTable.tableName,
+        ...bedrockTierEnv,
       },
     });
 
@@ -732,7 +781,12 @@ export class CitationAnalysisStack extends cdk.Stack {
       memorySize: 256,
       description: 'Deduplicate and prioritize citations',
       logGroup: deduplicationLogGroup,
-      environment: {CITATIONS_TABLE_NAME: citationsTable.tableName,},
+      environment: {
+        // Canonical name (audit #12). Legacy CITATIONS_TABLE_NAME kept for
+        // in-flight deploys; can be dropped after one full rollout.
+        DYNAMODB_TABLE_CITATIONS: citationsTable.tableName,
+        CITATIONS_TABLE_NAME: citationsTable.tableName,
+      },
     });
 
     // Crawler Lambda Layer - Browser tools (Playwright + AgentCore)
@@ -811,9 +865,9 @@ export class CitationAnalysisStack extends cdk.Stack {
       logGroup: crawlerLogGroup,
       environment: {
         DYNAMODB_TABLE_CRAWLED_CONTENT: crawledContentTable.tableName,
-        BEDROCK_MODEL_ID: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
         SCREENSHOTS_BUCKET: screenshotsBucket.bucketName,
         BROWSER_ID: crawlerBrowser.attrBrowserId, // Pre-created browser with Web Bot Auth
+        ...bedrockTierEnv,
       },
     });
 
@@ -1141,24 +1195,28 @@ export class CitationAnalysisStack extends cdk.Stack {
         'get-citation-gaps.py',
         'get-recommendations.py',
         'get-historical-trends.py',
+        'get-reports-overview.py',
       ]),
       layers: [sharedLayer],
       timeout: cdk.Duration.seconds(60),
       memorySize: 512,
       description: 'API: Consolidated stats, visibility, insights, gaps, recommendations, and trends',
       environment: {
-        // get-stats env vars
-        SEARCH_RESULTS_TABLE: searchResultsTable.tableName,
-        CITATIONS_TABLE: citationsTable.tableName,
-        CRAWLED_CONTENT_TABLE: crawledContentTable.tableName,
-        KEYWORDS_TABLE: keywordsTable.tableName,
-        // visibility/insights env vars
+        // Audit #12: canonical DYNAMODB_TABLE_* names. Legacy names kept
+        // for in-flight deploys; can be dropped after one full rollout.
         DYNAMODB_TABLE_SEARCH_RESULTS: searchResultsTable.tableName,
         DYNAMODB_TABLE_CITATIONS: citationsTable.tableName,
         DYNAMODB_TABLE_CRAWLED_CONTENT: crawledContentTable.tableName,
         DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName,
         DYNAMODB_TABLE_KEYWORDS: keywordsTable.tableName,
+        DYNAMODB_TABLE_PROVIDER_CONFIG: providerConfigTable.tableName,
+        // Legacy names (to be removed once rollout is verified):
+        SEARCH_RESULTS_TABLE: searchResultsTable.tableName,
+        CITATIONS_TABLE: citationsTable.tableName,
+        CRAWLED_CONTENT_TABLE: crawledContentTable.tableName,
+        KEYWORDS_TABLE: keywordsTable.tableName,
         PROVIDER_CONFIG_TABLE: providerConfigTable.tableName,
+        ...bedrockTierEnv,
       },
     });
 
@@ -1182,9 +1240,14 @@ export class CitationAnalysisStack extends cdk.Stack {
       memorySize: 256,
       description: 'API: Consolidated citations, URL breakdown, searches, crawled content, and raw responses',
       environment: {
+        // Audit #12 canonical names.
+        DYNAMODB_TABLE_CITATIONS: citationsTable.tableName,
+        DYNAMODB_TABLE_SEARCH_RESULTS: searchResultsTable.tableName,
+        DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName,
+        DYNAMODB_TABLE_CRAWLED_CONTENT: crawledContentTable.tableName,
+        // Legacy names, dropped once rollout verified.
         CITATIONS_TABLE: citationsTable.tableName,
         SEARCH_RESULTS_TABLE: searchResultsTable.tableName,
-        DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName,
         CRAWLED_CONTENT_TABLE: crawledContentTable.tableName,
         RAW_RESPONSES_BUCKET: rawResponsesBucket.bucketName,
         SCREENSHOTS_BUCKET: screenshotsBucket.bucketName,
@@ -1216,7 +1279,7 @@ export class CitationAnalysisStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
       description: 'API: Manage brand tracking configuration',
-      environment: {DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName,},
+      environment: {DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName, ...bedrockTierEnv},
     });
 
     // Consolidated Keyword Management Lambda (get-keywords + manage-keywords + keyword-research)
@@ -1235,6 +1298,10 @@ export class CitationAnalysisStack extends cdk.Stack {
       memorySize: 256,
       description: 'API: Consolidated keyword get/create/update/delete and keyword research',
       environment: {
+        // Audit #12 canonical names.
+        DYNAMODB_TABLE_KEYWORDS: keywordsTable.tableName,
+        DYNAMODB_TABLE_KEYWORD_RESEARCH: keywordResearchTable.tableName,
+        // Legacy names, dropped once rollout verified.
         KEYWORDS_TABLE: keywordsTable.tableName,
         KEYWORD_RESEARCH_TABLE: keywordResearchTable.tableName,
         SECRETS_PREFIX: 'citation-analysis/',
@@ -1257,10 +1324,14 @@ export class CitationAnalysisStack extends cdk.Stack {
       memorySize: 256,
       description: 'API: Consolidated query prompts, schedules, and provider config',
       environment: {
+        // Audit #12 canonical names.
+        DYNAMODB_TABLE_QUERY_PROMPTS: queryPromptsTable.tableName,
+        DYNAMODB_TABLE_PROVIDER_CONFIG: providerConfigTable.tableName,
+        // Legacy names, dropped once rollout verified.
         QUERY_PROMPTS_TABLE: queryPromptsTable.tableName,
+        PROVIDER_CONFIG_TABLE: providerConfigTable.tableName,
         STATE_MACHINE_ARN: stateMachine.stateMachineArn,
         SCHEDULE_ROLE_ARN: schedulerRole.roleArn,
-        PROVIDER_CONFIG_TABLE: providerConfigTable.tableName,
         SECRETS_PREFIX: 'citation-analysis/',
       },
     });
@@ -1282,6 +1353,10 @@ export class CitationAnalysisStack extends cdk.Stack {
       description: 'API: Consolidated trigger analysis and execution status',
       environment: {
         STATE_MACHINE_ARN: stateMachine.stateMachineArn,
+        // Audit #12 canonical names.
+        DYNAMODB_TABLE_KEYWORDS: keywordsTable.tableName,
+        DYNAMODB_TABLE_QUERY_PROMPTS: queryPromptsTable.tableName,
+        // Legacy names, dropped once rollout verified.
         KEYWORDS_TABLE: keywordsTable.tableName,
         QUERY_PROMPTS_TABLE: queryPromptsTable.tableName,
       },
@@ -1738,6 +1813,17 @@ export class CitationAnalysisStack extends cdk.Stack {
     const trendsResource = apiResource.addResource('trends');
     trendsResource.addMethod('GET', new apigateway.LambdaIntegration(statsInsightsFunction, integrationOptions), methodOptions);
 
+    // Reports aggregator endpoints
+    // /reports/overview returns the cross-keyword executive-summary rollup
+    // (top movers, improving/declining counts, top recommendations) used
+    // by the Executive Summary print report and the Brand Visibility
+    // all-keywords variant. Routed to the consolidated stats-insights
+    // Lambda so it shares the same hot container as /trends and
+    // /recommendations (which it composes).
+    const reportsResource = apiResource.addResource('reports');
+    const reportsOverviewResource = reportsResource.addResource('overview');
+    reportsOverviewResource.addMethod('GET', new apigateway.LambdaIntegration(statsInsightsFunction, integrationOptions), methodOptions);
+
     // Persona Rankings API Route
     const personaRankingsResource = apiResource.addResource('persona-rankings');
     personaRankingsResource.addMethod('GET', new apigateway.LambdaIntegration(getPersonaRankingsFunction, integrationOptions), methodOptions);
@@ -1770,6 +1856,7 @@ export class CitationAnalysisStack extends cdk.Stack {
         DYNAMODB_TABLE_KEYWORDS: keywordsTable.tableName,
         DYNAMODB_TABLE_SELF_REFLECTION: selfReflectionTable.tableName,
         GENERATION_TIMEOUT_SECONDS: '240',
+        ...bedrockTierEnv,
       },
     });
     searchResultsTable.grantReadData(contentStudioFunction);

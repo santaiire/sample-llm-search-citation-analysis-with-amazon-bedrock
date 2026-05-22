@@ -97,6 +97,28 @@ describe('useReportsOverview', () => {
     expect(calledWith).toContain('top=5');
   });
 
+  it('targets the /reports/overview endpoint path', async () => {
+    mockFetch.mockResolvedValue(mockOk(SAMPLE_OVERVIEW));
+    const { result } = renderHook(() => useReportsOverview());
+    await act(async () => {
+      await result.current.fetchReportsOverview();
+    });
+    const calledWith = mockFetch.mock.calls[0][0] as string;
+    expect(calledWith).toContain('/reports/overview');
+  });
+
+  it('uses defaults of 30 days, day period, top=3 when no args supplied', async () => {
+    mockFetch.mockResolvedValue(mockOk(SAMPLE_OVERVIEW));
+    const { result } = renderHook(() => useReportsOverview());
+    await act(async () => {
+      await result.current.fetchReportsOverview();
+    });
+    const calledWith = mockFetch.mock.calls[0][0] as string;
+    expect(calledWith).toContain('days=30');
+    expect(calledWith).toContain('period=day');
+    expect(calledWith).toContain('top=3');
+  });
+
   it('stores the parsed overview payload after a successful fetch', async () => {
     mockFetch.mockResolvedValue(mockOk(SAMPLE_OVERVIEW));
     const { result } = renderHook(() => useReportsOverview());
@@ -106,17 +128,39 @@ describe('useReportsOverview', () => {
     expect(result.current.data?.overall_score).toBe(57.5);
   });
 
-  it('records the error message when the response is not OK', async () => {
+  it('returns the parsed payload from the fetch promise', async () => {
+    mockFetch.mockResolvedValue(mockOk(SAMPLE_OVERVIEW));
+    const { result } = renderHook(() => useReportsOverview());
+    const holder: { value: typeof SAMPLE_OVERVIEW | null } = { value: null };
+    await act(async () => {
+      holder.value = await result.current.fetchReportsOverview();
+    });
+    expect(holder.value?.top_improving).toHaveLength(1);
+  });
+
+  it('returns null and records error when the response is not OK', async () => {
     mockFetch.mockResolvedValue({
       ok: false,
       status: 500,
       json: async () => ({}),
     } as unknown as Response);
     const { result } = renderHook(() => useReportsOverview());
+    const holder: { value: unknown } = { value: 'unset' };
+    await act(async () => {
+      holder.value = await result.current.fetchReportsOverview();
+    });
+    expect(holder.value).toBeNull();
+    expect(result.current.error).toBeTruthy();
+  });
+
+  it('returns null and records error when the backend body is a {error} shape', async () => {
+    mockFetch.mockResolvedValue(mockOk({ error: 'No data' }));
+    const { result } = renderHook(() => useReportsOverview());
     await act(async () => {
       await result.current.fetchReportsOverview();
     });
     expect(result.current.error).toBeTruthy();
+    expect(result.current.data).toBeNull();
   });
 
   it('rejects responses missing the overall_score field as malformed', async () => {

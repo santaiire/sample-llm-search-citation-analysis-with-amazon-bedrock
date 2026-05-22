@@ -26,6 +26,17 @@ from shared.decorators import api_handler, validate, require_keyword
 from shared.api_response import success_response
 from shared.utils import get_brand_config
 from shared.config import PROVIDERS
+from shared.constants import (
+    UNRANKED_SENTINEL,
+    VISIBILITY_MENTION_LOG_BASE,
+    VISIBILITY_MENTION_WEIGHT,
+    VISIBILITY_PROVIDER_WEIGHT,
+    VISIBILITY_RANK_CAP,
+    VISIBILITY_RANK_INVERSE_BASE,
+    VISIBILITY_RANK_WEIGHT,
+    VISIBILITY_SENTIMENT_WEIGHT,
+)
+from shared.providers import get_enabled_provider_count
 from decimal_utils import to_int
 
 logger = logging.getLogger(__name__)
@@ -35,41 +46,6 @@ dynamodb = boto3.resource('dynamodb')
 
 # Fail-fast: Required environment variables
 SEARCH_RESULTS_TABLE = os.environ['DYNAMODB_TABLE_SEARCH_RESULTS']
-PROVIDER_CONFIG_TABLE = os.environ.get('PROVIDER_CONFIG_TABLE')  # Optional for fallback
-
-
-def get_enabled_provider_count() -> int:
-    """
-    Get the count of enabled providers from the provider config table.
-    Falls back to total known providers if table is not configured or empty.
-    """
-    if not PROVIDER_CONFIG_TABLE:
-        return len(PROVIDERS)
-    
-    try:
-        table = dynamodb.Table(PROVIDER_CONFIG_TABLE)
-        response = table.scan(
-            ProjectionExpression='provider_id, enabled'
-        )
-        items = response.get('Items', [])
-        
-        if not items:
-            # No config entries means all providers are enabled by default
-            return len(PROVIDERS)
-        
-        # Count providers that are explicitly enabled or not configured (default enabled)
-        configured_providers = {item['provider_id']: item.get('enabled', True) for item in items}
-        
-        enabled_count = 0
-        for provider in PROVIDERS:
-            # Default to enabled if not in config table
-            if configured_providers.get(provider, True):
-                enabled_count += 1
-        
-        return enabled_count if enabled_count > 0 else len(PROVIDERS)
-    except Exception as e:
-        logger.warning(f"Error getting provider config: {e}")
-        return len(PROVIDERS)
 
 
 def calculate_visibility_score(
@@ -81,25 +57,31 @@ def calculate_visibility_score(
 ) -> float:
     """
     Calculate visibility score (0-100) based on multiple factors.
-    
-    Factors:
-    - Provider coverage (40%): How many AI engines mention the brand
-    - Ranking position (30%): Best rank across providers (1=best)
-    - Mention frequency (20%): Total number of mentions
-    - Sentiment (10%): Average sentiment score
+    Factors (weights sum to 100; see shared.constants for the source of truth):
+    - Provider coverage: VISIBILITY_PROVIDER_WEIGHT
+    - Ranking position: VISIBILITY_RANK_WEIGHT
+    - Mention frequency: VISIBILITY_MENTION_WEIGHT
+    - Sentiment: VISIBILITY_SENTIMENT_WEIGHT
     """
-    # Provider coverage score (0-40)
-    provider_score = (provider_count / total_providers) * 40 if total_providers > 0 else 0
-    
-    # Ranking score (0-30) - inverse of rank, capped at rank 10
-    rank_score = max(0, (11 - min(best_rank, 10)) / 10) * 30
-    
-    # Mention score (0-20) - logarithmic scale, capped at 50 mentions
-    mention_score = min(math.log(total_mentions + 1) / math.log(51), 1) * 20
-    
-    # Sentiment score (0-10) - convert -1 to 1 scale to 0-10
-    sentiment_score = ((avg_sentiment_score + 1) / 2) * 10
-    
+    # Provider coverage score
+    provider_score = (
+        (provider_count / total_providers) * VISIBILITY_PROVIDER_WEIGHT
+        if total_providers > 0 else 0
+    )
+
+    # Ranking score — inverse of rank, capped at VISIBILITY_RANK_CAP
+    capped_rank = min(best_rank, VISIBILITY_RANK_CAP)
+    rank_score = max(0, (VISIBILITY_RANK_INVERSE_BASE - capped_rank) / VISIBILITY_RANK_CAP) * VISIBILITY_RANK_WEIGHT
+
+    # Mention score — logarithmic saturation at VISIBILITY_MENTION_SATURATION_COUNT mentions
+    mention_score = (
+        min(math.log(total_mentions + 1) / math.log(VISIBILITY_MENTION_LOG_BASE), 1)
+        * VISIBILITY_MENTION_WEIGHT
+    )
+
+    # Sentiment score — convert -1..1 scale to 0..VISIBILITY_SENTIMENT_WEIGHT
+    sentiment_score = ((avg_sentiment_score + 1) / 2) * VISIBILITY_SENTIMENT_WEIGHT
+
     return round(provider_score + rank_score + mention_score + sentiment_score, 1)
 
 
@@ -179,7 +161,7 @@ def get_visibility_metrics(keyword: str, config: Dict[str, Any], query_prompt_id
             brand_data[name]['providers'].add(provider)
             mention_count = to_int(brand.get('mention_count'), 1)
             brand_data[name]['mentions'] += mention_count
-            brand_data[name]['ranks'].append(to_int(brand.get('rank'), 999))
+            brand_data[name]['ranks'].append(to_int(brand.get('rank'), UNRANKED_SENTINEL))
             if brand.get('sentiment'):
                 brand_data[name]['sentiments'].append(sentiment_to_score(brand.get('sentiment')))
             
@@ -192,7 +174,7 @@ def get_visibility_metrics(keyword: str, config: Dict[str, Any], query_prompt_id
     brand_metrics = []
     for name, data in brand_data.items():
         provider_count = len(data['providers'])
-        best_rank = min(data['ranks']) if data['ranks'] else 999
+        best_rank = min(data['ranks']) if data['ranks'] else UNRANKED_SENTINEL
         avg_sentiment = sum(data['sentiments']) / len(data['sentiments']) if data['sentiments'] else 0.0
         
         # Ensure all values are native Python types

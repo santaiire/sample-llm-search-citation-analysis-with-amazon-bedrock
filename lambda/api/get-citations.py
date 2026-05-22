@@ -5,18 +5,20 @@ Returns deduplicated citation URLs sorted by total mentions across all keywords.
 Queries the CitationAnalysis-Citations table (deduplicated data) instead of raw search results.
 """
 
-import sys
 import logging
+import os
+import sys
+from collections import Counter, defaultdict
+
 import boto3
 from boto3.dynamodb.conditions import Key
-from collections import Counter, defaultdict
-import os
 
 # Add shared module to path
 sys.path.insert(0, '/opt/python')
 
-from shared.decorators import api_handler, validate
 from shared.api_response import success_response
+from shared.decorators import api_handler, validate
+from shared.env_vars import resolve_table_env
 from shared.utils import get_brand_config
 
 logger = logging.getLogger(__name__)
@@ -24,8 +26,8 @@ logger.setLevel(logging.INFO)
 
 dynamodb = boto3.resource('dynamodb')
 
-# Fail-fast: Required environment variables
-CITATIONS_TABLE = os.environ['CITATIONS_TABLE']
+# Fail-fast: Required environment variables (audit #12 canonical naming).
+CITATIONS_TABLE = resolve_table_env('DYNAMODB_TABLE_CITATIONS', 'CITATIONS_TABLE')
 citations_table = dynamodb.Table(CITATIONS_TABLE)
 
 # Optional: Brand config table for dynamic brand detection
@@ -60,13 +62,25 @@ def _detect_brand_in_url(url_lower, tracked_brands):
     return 'Other'
 
 
+# Cap paginated scans/queries to prevent runaway cost and Lambda timeouts.
+# At 1 MB per page (DynamoDB limit), 25 pages is ~25 MB of item data — plenty
+# for the Citations table which is bounded to ~20 items per keyword after
+# deduplication, and a safety net if the table ever grows unexpectedly.
+# See audit item 13.
+_MAX_SCAN_PAGES = 25
+
+
 def _scan_all_citations(keyword=None):
     """
     Scan the deduplicated Citations table.
     If keyword is provided, query by partition key for efficiency.
     Otherwise, full scan to get all citations across all keywords.
+
+    Both paths are bounded by ``_MAX_SCAN_PAGES`` and log a warning when
+    the cap is hit so the truncation is visible in CloudWatch.
     """
     items = []
+    pages_scanned = 0
 
     if keyword:
         # Efficient query by partition key
@@ -74,21 +88,32 @@ def _scan_all_citations(keyword=None):
             KeyConditionExpression=Key('keyword').eq(keyword)
         )
         items.extend(response.get('Items', []))
-        while response.get('LastEvaluatedKey'):
+        pages_scanned += 1
+        while response.get('LastEvaluatedKey') and pages_scanned < _MAX_SCAN_PAGES:
             response = citations_table.query(
                 KeyConditionExpression=Key('keyword').eq(keyword),
                 ExclusiveStartKey=response['LastEvaluatedKey']
             )
             items.extend(response.get('Items', []))
+            pages_scanned += 1
     else:
         # Full scan for all keywords
         response = citations_table.scan()
         items.extend(response.get('Items', []))
-        while response.get('LastEvaluatedKey'):
+        pages_scanned += 1
+        while response.get('LastEvaluatedKey') and pages_scanned < _MAX_SCAN_PAGES:
             response = citations_table.scan(
                 ExclusiveStartKey=response['LastEvaluatedKey']
             )
             items.extend(response.get('Items', []))
+            pages_scanned += 1
+
+    if response.get('LastEvaluatedKey'):
+        logger.warning(
+            "Citations scan hit the %d-page cap (keyword=%s, items=%d). "
+            "Results are truncated.",
+            _MAX_SCAN_PAGES, keyword or '<all>', len(items),
+        )
 
     return items
 

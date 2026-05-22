@@ -14,7 +14,7 @@ import sys
 sys.path.insert(0, '/opt/python')
 
 from shared.api_response import not_found_response
-from shared.router import HandlerLoader
+from shared.router import HandlerLoader, path_matches_route
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -30,11 +30,11 @@ def handler(event, context):
     logger.info(f"Routing: resource={resource}, path={path}, method={method}")
 
     # keyword-research routes take priority (longer prefix)
-    if resource.startswith('/api/keyword-research') or path.startswith('/api/keyword-research'):
+    if path_matches_route('/api/keyword-research', resource, path):
         return _handlers.get('keyword-research.py')(event, context)
 
     # /api/keywords routes: GET list goes to get-keywords, mutations go to manage-keywords
-    if resource.startswith('/api/keywords') or path.startswith('/api/keywords'):
+    if path_matches_route('/api/keywords', resource, path):
         if method == 'GET' and not (event.get('pathParameters') or {}).get('id'):
             return _handlers.get('get-keywords.py')(event, context)
         return _handlers.get('manage-keywords.py')(event, context)

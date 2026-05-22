@@ -10,9 +10,7 @@ Covers:
 
 import os
 import sys
-import json
-from unittest.mock import patch, MagicMock, call
-from decimal import Decimal
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -85,16 +83,21 @@ class TestGetProviderModel:
             # Should only call DynamoDB once
             assert mock_table.get_item.call_count == 1
 
-    def test_falls_back_on_error(self, mock_dynamodb):
-        """Returns default model when DynamoDB read fails."""
+    def test_raises_when_dynamodb_fails(self, mock_dynamodb):
+        """Fails closed: raises instead of silently substituting the default.
+
+        A transient DynamoDB error must not cause us to invoke a different
+        model than the admin configured. The caller is expected to catch
+        and skip the provider for this run.
+        """
         mock_db, mock_table = mock_dynamodb
         mock_table.get_item.side_effect = Exception('DynamoDB error')
 
         with patch('handler.dynamodb', mock_db):
             import handler
             handler._provider_model_cache.clear()
-            result = handler.get_provider_model('openai')
-            assert result == 'gpt-5-mini'
+            with pytest.raises(handler.ProviderConfigUnavailableError):
+                handler.get_provider_model('openai')
 
     def test_default_models_for_all_providers(self, mock_dynamodb):
         """Each provider has a sensible default model."""
@@ -104,12 +107,83 @@ class TestGetProviderModel:
         with patch('handler.dynamodb', mock_db):
             import handler
             handler._provider_model_cache.clear()
-            
+
             assert handler.get_provider_model('openai') == 'gpt-5-mini'
             handler._provider_model_cache.clear()
             assert handler.get_provider_model('perplexity') == 'sonar'
             handler._provider_model_cache.clear()
             assert handler.get_provider_model('gemini') == 'gemini-3-flash-preview'
+
+
+class TestIsProviderEnabled:
+    """Tests for is_provider_enabled() — fail-closed on config read errors.
+
+    Regression guard: a prior version returned True on DynamoDB errors, which
+    meant a transient outage could silently run a provider the admin disabled.
+    User intent (the disable flag) must win over infra failures.
+    """
+
+    def test_returns_true_when_config_item_has_enabled_true(self, mock_dynamodb):
+        mock_db, mock_table = mock_dynamodb
+        mock_table.get_item.return_value = {
+            'Item': {'provider_id': 'openai', 'enabled': True}
+        }
+
+        with patch('handler.dynamodb', mock_db):
+            import handler
+            assert handler.is_provider_enabled('openai') is True
+
+    def test_returns_false_when_config_item_has_enabled_false(self, mock_dynamodb):
+        mock_db, mock_table = mock_dynamodb
+        mock_table.get_item.return_value = {
+            'Item': {'provider_id': 'openai', 'enabled': False}
+        }
+
+        with patch('handler.dynamodb', mock_db):
+            import handler
+            assert handler.is_provider_enabled('openai') is False
+
+    def test_returns_true_when_no_config_row_exists(self, mock_dynamodb):
+        """First-run default: no row yet means the provider is enabled."""
+        mock_db, mock_table = mock_dynamodb
+        mock_table.get_item.return_value = {}
+
+        with patch('handler.dynamodb', mock_db):
+            import handler
+            assert handler.is_provider_enabled('openai') is True
+
+    def test_returns_false_when_dynamodb_read_fails(self, mock_dynamodb):
+        """Fails closed: a DynamoDB outage must not override a user disable.
+
+        Reverting this to the old fail-open behavior would make this test fail.
+        """
+        mock_db, mock_table = mock_dynamodb
+        mock_table.get_item.side_effect = Exception('DynamoDB ThrottlingException')
+
+        with patch('handler.dynamodb', mock_db):
+            import handler
+            assert handler.is_provider_enabled('openai') is False
+
+    def test_does_not_leak_exception_details_in_log_message(
+        self, mock_dynamodb, caplog,
+    ):
+        """Logs error type only, not the full str(e) which can contain table
+        names or other infra details."""
+        import logging
+
+        mock_db, mock_table = mock_dynamodb
+        mock_table.get_item.side_effect = RuntimeError('Sensitive: table arn:aws:dynamodb:...')
+
+        with patch('handler.dynamodb', mock_db):
+            import handler
+            with caplog.at_level(logging.ERROR, logger='handler'):
+                handler.is_provider_enabled('openai')
+
+        assert any(
+            'provider_config_read_failed' in record.message
+            and 'Sensitive' not in record.message
+            for record in caplog.records
+        )
 
 
 class TestQueryOpenAIModel:
@@ -136,8 +210,9 @@ class TestQueryOpenAIModel:
 
     def test_default_model_is_gpt41(self):
         """Default model parameter is gpt-5-mini."""
-        import handler
         import inspect
+
+        import handler
         sig = inspect.signature(handler.query_openai)
         assert sig.parameters['model'].default == 'gpt-5-mini'
 
@@ -161,8 +236,7 @@ class TestQueryTemplateSubstitution:
             )
 
         call_args = mock_client.responses_with_web_search.call_args
-        query = call_args.kwargs.get('query') or call_args[1].get('query')
-        assert query == 'As a family traveler, find me hotels in malaga'
+        assert call_args.kwargs.get('query') == 'As a family traveler, find me hotels in malaga'
 
     def test_openai_default_query_without_template(self):
         """query_openai uses default format when no template provided."""
@@ -177,8 +251,7 @@ class TestQueryTemplateSubstitution:
             handler.query_openai('hotels in malaga', 'key')
 
         call_args = mock_client.responses_with_web_search.call_args
-        query = call_args.kwargs.get('query') or call_args[1].get('query')
-        assert query == 'Search for information about: hotels in malaga'
+        assert call_args.kwargs.get('query') == 'Search for information about: hotels in malaga'
 
     def test_perplexity_uses_template(self):
         """query_perplexity substitutes {keyword} in template."""
@@ -198,7 +271,7 @@ class TestQueryTemplateSubstitution:
             )
 
         call_args = mock_client.chat_completion.call_args
-        messages = call_args[0][0] if call_args[0] else call_args.kwargs.get('messages')
+        messages = call_args.args[0]
         assert messages[0]['content'] == 'As a business traveler, find hotels in malaga'
 
     def test_gemini_uses_template(self):
@@ -215,8 +288,7 @@ class TestQueryTemplateSubstitution:
             )
 
         call_args = mock_client.generate_content.call_args
-        query = call_args[0][0]
-        assert query == 'From the US, find me hotels in malaga'
+        assert call_args.args[0] == 'From the US, find me hotels in malaga'
 
 
 class TestHandlerPromptLoop:
@@ -228,7 +300,7 @@ class TestHandlerPromptLoop:
 
         with patch.object(handler, 'execute_all_providers', return_value=[]) as mock_exec, \
              patch.object(handler, 'store_search_results', return_value=True):
-            result = handler.handler({
+            handler.handler({
                 'keyword': 'test',
                 'timestamp': '2026-01-01T00:00:00Z',
             }, {})
@@ -243,7 +315,7 @@ class TestHandlerPromptLoop:
 
         with patch.object(handler, 'execute_all_providers', return_value=[]) as mock_exec, \
              patch.object(handler, 'store_search_results', return_value=True):
-            result = handler.handler({
+            handler.handler({
                 'keyword': 'test',
                 'timestamp': '2026-01-01T00:00:00Z',
                 'query_prompts': [
@@ -263,7 +335,7 @@ class TestHandlerPromptLoop:
             'status': 'success', 'raw_response': None, 'metadata': {},
         }
 
-        with patch.object(handler, 'execute_all_providers', return_value=[fake_result.copy()]) as mock_exec, \
+        with patch.object(handler, 'execute_all_providers', return_value=[fake_result.copy()]), \
              patch.object(handler, 'store_search_results', return_value=True) as mock_store:
             handler.handler({
                 'keyword': 'test',
@@ -274,7 +346,7 @@ class TestHandlerPromptLoop:
             }, {})
 
         # Check that store was called with results tagged with prompt info
-        stored_results = mock_store.call_args[0][2]
+        stored_results = mock_store.call_args.args[2]
         assert stored_results[0]['query_prompt_id'] == 'p1'
         assert stored_results[0]['query_prompt_name'] == 'Family'
 

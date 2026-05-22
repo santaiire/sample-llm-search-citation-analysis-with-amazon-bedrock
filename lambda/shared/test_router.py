@@ -141,3 +141,77 @@ def test_translates_hyphenated_filename_to_valid_module_name(sub_handler_dir):
 
     assert 'good_handler' in sys.modules
     assert sys.modules['good_handler'].CALL_COUNT >= 1
+
+
+
+class TestPathMatchesRoute:
+    """Regression tests for `path_matches_route` — segment-exact routing
+    that replaced the `startswith` substring match in every consolidated
+    router (audit item 26).
+    """
+
+    def test_exact_route_matches(self) -> None:
+        assert router_mod.path_matches_route('/api/stats', '/api/stats', '/api/stats') is True
+
+    def test_route_with_segment_child_matches(self) -> None:
+        """`/api/stats/summary` is a child segment of `/api/stats`."""
+        assert router_mod.path_matches_route('/api/stats', '/api/stats', '/api/stats/summary') is True
+
+    def test_route_template_with_path_parameter_matches(self) -> None:
+        """API Gateway resource templates carry path params — the concrete
+        path should still match the template's route prefix."""
+        assert router_mod.path_matches_route(
+            '/api/executions', '/api/executions/{id}', '/api/executions/abc123'
+        ) is True
+
+    def test_does_not_match_sibling_route_with_shared_prefix(self) -> None:
+        """REGRESSION GUARD: the old `startswith` implementation matched
+        `/api/stats-bogus` for the `/api/stats` route. The fix requires a
+        `/` segment boundary, so cousin routes no longer collide."""
+        assert router_mod.path_matches_route('/api/stats', '/api/stats-bogus', '/api/stats-bogus') is False
+
+    def test_does_not_match_prefix_without_slash_boundary(self) -> None:
+        """`/api/keywordsurprise` is not a child of `/api/keywords`."""
+        assert router_mod.path_matches_route('/api/keywords', '/api/keywordsurprise', '/api/keywordsurprise') is False
+
+    def test_matches_if_either_resource_or_path_matches(self) -> None:
+        """Routers check both the template (resource) and the concrete path
+        because API Gateway returns them separately."""
+        assert router_mod.path_matches_route('/api/stats', '/api/stats', '/other/path') is True
+        assert router_mod.path_matches_route('/api/stats', '/other/resource', '/api/stats') is True
+
+    def test_returns_false_when_both_are_empty(self) -> None:
+        assert router_mod.path_matches_route('/api/stats', '', '') is False
+
+    def test_returns_false_when_both_are_none(self) -> None:
+        assert router_mod.path_matches_route('/api/stats', None, None) is False  # type: ignore[arg-type]
+
+
+
+class TestPathContainsSegment:
+    """Tests for `path_contains_segment` — the core primitive both
+    router matchers are built on (see `path_matches_route` and the
+    tuple-key route matcher in decorators).
+    """
+
+    def test_matches_exact_segment(self) -> None:
+        assert router_mod.path_contains_segment('/ideas', '/ideas') is True
+
+    def test_matches_segment_at_end_of_path(self) -> None:
+        assert router_mod.path_contains_segment('/ideas', '/api/content-studio/ideas') is True
+
+    def test_matches_interior_segment(self) -> None:
+        assert router_mod.path_contains_segment('/ideas', '/api/content-studio/ideas/123') is True
+
+    def test_does_not_match_hyphenated_cousin(self) -> None:
+        """REGRESSION: `/ideas` vs `/my-ideas-list` — the exact bug audit
+        item 26 called out. `endswith('/ideas')` returns False because
+        the leading `/` forces a segment boundary."""
+        assert router_mod.path_contains_segment('/ideas', '/api/content-studio/my-ideas-list') is False
+
+    def test_does_not_match_suffix_attached_to_segment(self) -> None:
+        """`/ideas` is not a valid segment inside `/ideas-archive`."""
+        assert router_mod.path_contains_segment('/ideas', '/api/x/ideas-archive') is False
+
+    def test_returns_false_for_empty_request_path(self) -> None:
+        assert router_mod.path_contains_segment('/ideas', '') is False

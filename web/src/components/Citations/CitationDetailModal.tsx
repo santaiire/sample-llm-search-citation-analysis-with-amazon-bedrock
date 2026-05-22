@@ -290,7 +290,7 @@ export const CitationDetailModal = ({
             {citation.status === 'blocked' && <BlockedPageBanner blockReason={citation.block_reason} />}
             <div className="bg-gray-50 rounded-lg p-4">
               <p className="text-sm text-gray-600 mb-4">Screenshot captured on {formatDate(citation.crawled_at)}</p>
-              <img src={citation.screenshot_url} alt={`Screenshot of ${citation.title}`} className="w-full border border-gray-300 rounded shadow-lg" />
+              <img src={citation.screenshot_url} alt={`Screenshot of ${citation.title}`} className="w-full border border-gray-300 rounded shadow-lg dark:brightness-90 dark:contrast-95" />
             </div>
           </div>
         ) : null;

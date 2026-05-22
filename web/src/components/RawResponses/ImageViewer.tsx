@@ -46,7 +46,7 @@ export const ImageViewer = ({
             <img
               src={imageUrl}
               alt={file.name}
-              className={`max-w-full max-h-[600px] rounded-lg shadow-lg transition-opacity ${
+              className={`max-w-full max-h-[600px] rounded-lg shadow-lg transition-opacity dark:brightness-90 dark:contrast-95 ${
                 imageLoaded ? 'opacity-100' : 'opacity-0'
               }`}
               onLoad={() => setImageLoaded(true)}

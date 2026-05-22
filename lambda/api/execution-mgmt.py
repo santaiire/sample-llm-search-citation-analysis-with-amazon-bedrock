@@ -14,7 +14,7 @@ import sys
 sys.path.insert(0, '/opt/python')
 
 from shared.api_response import not_found_response
-from shared.router import HandlerLoader
+from shared.router import HandlerLoader, path_matches_route
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -35,7 +35,7 @@ def handler(event, context):
     logger.info(f"Routing: resource={resource}, path={path}")
 
     for route_path, filename in ROUTE_MAP.items():
-        if resource.startswith(route_path) or path.startswith(route_path):
+        if path_matches_route(route_path, resource, path):
             return _handlers.get(filename)(event, context)
 
     logger.error(f"No route matched for resource={resource}, path={path}")

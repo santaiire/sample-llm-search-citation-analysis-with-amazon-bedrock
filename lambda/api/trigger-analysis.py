@@ -6,19 +6,21 @@ Uses efficient query with StatusIndex GSI instead of scan with filter.
 """
 
 import json
+import logging
+import os
+import sys
+from typing import Any
+
 import boto3
 from boto3.dynamodb.conditions import Key
-from typing import Dict, Any
-import os
-from datetime import datetime
-import logging
-import sys
 
 # Add shared module to path
 sys.path.insert(0, '/opt/python')
 
-from shared.decorators import api_handler
 from shared.api_response import success_response, validation_error
+from shared.decorators import api_handler
+from shared.env_vars import resolve_table_env
+from shared.utils import get_timestamp, get_timestamp_compact
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -26,20 +28,26 @@ logger.setLevel(logging.INFO)
 stepfunctions = boto3.client('stepfunctions')
 dynamodb = boto3.resource('dynamodb')
 
-# Fail-fast: Required environment variables
+# Fail-fast: Required environment variables (audit #12 canonical naming).
 STATE_MACHINE_ARN = os.environ['STATE_MACHINE_ARN']
-KEYWORDS_TABLE = os.environ['KEYWORDS_TABLE']
-QUERY_PROMPTS_TABLE = os.environ.get('QUERY_PROMPTS_TABLE', 'CitationAnalysis-QueryPrompts')
+KEYWORDS_TABLE = resolve_table_env('DYNAMODB_TABLE_KEYWORDS', 'KEYWORDS_TABLE')
+# Query prompts table is optional — the analysis flow has a no-prompt fallback
+# for deployments that haven't enabled the feature yet. Default mirrors the
+# CDK stack's resource name for bootstrap deploys.
+QUERY_PROMPTS_TABLE = resolve_table_env(
+    'DYNAMODB_TABLE_QUERY_PROMPTS', 'QUERY_PROMPTS_TABLE',
+    required=False, default='CitationAnalysis-QueryPrompts',
+)
 
 keywords_table = dynamodb.Table(KEYWORDS_TABLE)
 query_prompts_table = dynamodb.Table(QUERY_PROMPTS_TABLE)
 
 
 @api_handler
-def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """
     POST /api/trigger-analysis
-    
+
     Starts a Step Functions execution with active keywords from DynamoDB.
     Uses StatusIndex GSI for efficient querying of active keywords.
     """
@@ -61,19 +69,19 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             Limit=500
         )
         keywords = response.get('Items', [])
-    
+
     if not keywords:
         return validation_error('No active keywords found. Please add keywords first.', event)
-    
+
     # Format keywords for Step Functions
     keyword_list = [
         {
             'keyword': kw['keyword'],
-            'timestamp': datetime.utcnow().isoformat() + 'Z'
+            'timestamp': get_timestamp()
         }
         for kw in keywords
     ]
-    
+
     # Fetch enabled query prompts
     query_prompts = []
     try:
@@ -91,10 +99,10 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         logger.info(f"Found {len(query_prompts)} enabled query prompts")
     except Exception as e:
         logger.warning(f"Could not fetch query prompts, proceeding without them: {e}")
-    
+
     # Start Step Functions execution
-    execution_name = f"analysis-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
-    
+    execution_name = f"analysis-{get_timestamp_compact()}"
+
     execution_response = stepfunctions.start_execution(
         stateMachineArn=STATE_MACHINE_ARN,
         name=execution_name,
@@ -103,7 +111,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             'query_prompts': query_prompts
         })
     )
-    
+
     prompt_count = len(query_prompts)
     result = {
         'execution_arn': execution_response['executionArn'],
@@ -113,5 +121,5 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         'query_prompts_count': prompt_count,
         'message': f'Analysis started with {len(keyword_list)} keywords and {prompt_count} query prompts'
     }
-    
+
     return success_response(result, event)
