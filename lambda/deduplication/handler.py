@@ -11,6 +11,7 @@ from typing import Any
 
 import boto3
 
+from shared.constants import MAX_CITATIONS_PER_KEYWORD_DEFAULT
 from shared.step_function_response import log_error, step_function_success
 
 # Import shared utilities
@@ -26,6 +27,13 @@ dynamodb = boto3.resource('dynamodb')
 # Fail-fast: Required environment variables
 CITATIONS_TABLE_NAME = os.environ['CITATIONS_TABLE_NAME']
 citations_table = dynamodb.Table(CITATIONS_TABLE_NAME)
+
+# Runtime override for the citations-per-keyword cap. Defaults to the shared
+# constant; setting `MAX_CITATIONS_PER_KEYWORD` in the Lambda environment lets
+# operators tune the cap without redeploying code.
+MAX_CITATIONS_PER_KEYWORD = int(
+    os.environ.get('MAX_CITATIONS_PER_KEYWORD', MAX_CITATIONS_PER_KEYWORD_DEFAULT)
+)
 
 
 def deduplicate_citations(results: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -73,17 +81,23 @@ def deduplicate_citations(results: list[dict[str, Any]]) -> dict[str, dict[str, 
     return deduplicated
 
 
-def prioritize_citations(deduplicated: dict[str, dict[str, Any]], max_citations: int = 20) -> list[dict[str, Any]]:
+def prioritize_citations(
+    deduplicated: dict[str, dict[str, Any]],
+    max_citations: int | None = None,
+) -> list[dict[str, Any]]:
     """
     Prioritize citations by citation count and limit to top N.
 
     Args:
         deduplicated: Dictionary of deduplicated citations
-        max_citations: Maximum number of citations to return
-
-    Returns:
-        List of prioritized citations with priority numbers
+        max_citations: Maximum number of citations to return. Defaults to
+            the module-level ``MAX_CITATIONS_PER_KEYWORD`` (overridable via
+            env var). Pass an explicit value for per-call overrides in
+            tests or migration scripts.
     """
+    if max_citations is None:
+        max_citations = MAX_CITATIONS_PER_KEYWORD
+
     # Convert to list and sort by citation count (descending)
     citations_list = []
     for normalized_url, metadata in deduplicated.items():
@@ -194,8 +208,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         # Step 1: Deduplicate citations across all providers
         deduplicated = deduplicate_citations(results)
 
-        # Step 2: Prioritize citations by citation count
-        prioritized = prioritize_citations(deduplicated, max_citations=20)
+        # Step 2: Prioritize citations by citation count (top N from shared config)
+        prioritized = prioritize_citations(deduplicated)
 
         # Step 3: Store citations in DynamoDB
         store_citations(keyword, prioritized)

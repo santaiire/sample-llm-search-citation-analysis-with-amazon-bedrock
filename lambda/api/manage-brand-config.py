@@ -19,6 +19,8 @@ sys.path.insert(0, '/opt/python')
 
 from shared.api_response import success_response, validation_error
 from shared.decorators import api_handler, cors_preflight, parse_json_body, route_handler, validate
+from shared.industry_presets import INDUSTRY_PRESETS as _BASE_PRESETS
+from shared.industry_presets import get_preset as get_shared_preset
 from shared.llm_json import parse_llm_json
 from shared.prompt_safety import untrusted_input_system_instruction, wrap_user_input
 from shared.utils import get_timestamp
@@ -84,117 +86,37 @@ TEXT TO ANALYZE:
 JSON OUTPUT:"""
 
 
-# Industry presets with default prompts
-INDUSTRY_PRESETS = {
-    "hotels": {
-        "name": "Hotels & Hospitality",
-        "description": "Track hotel brands, chains, and individual properties",
-        "entity_types": ["hotel chains", "hotel brands", "individual properties", "resorts", "boutique hotels"],
-        "example_brands": ["Marriott", "Hilton", "Hyatt", "InterContinental", "Four Seasons"],
-        "extraction_focus": "hotel and accommodation recommendations",
+# Industry preset structural data is owned by shared.industry_presets. The
+# dashboard API returns the same base fields plus a derived `default_prompt`
+# computed at request time via `_preset_with_prompt`, avoiding drift between
+# this file's copy and the extraction Lambda's.
+
+
+def _preset_with_prompt(preset: dict) -> dict:
+    """Decorate a shared preset with a `default_prompt` string.
+
+    Dashboard clients consume both the structural fields and a ready-to-use
+    prompt. Computing the prompt here keeps the shared module free of
+    API-specific concerns and lets us change the prompt template without
+    touching the extraction Lambda.
+    """
+    return {
+        **preset,
         "default_prompt": generate_default_prompt(
-            "Hotels & Hospitality",
-            "hotel and accommodation recommendations",
-            ["hotel chains", "hotel brands", "individual properties", "resorts", "boutique hotels"]
-        )
-    },
-    "restaurants": {
-        "name": "Restaurants & Food Service",
-        "description": "Track restaurant chains, fast food, and dining brands",
-        "entity_types": ["restaurant chains", "fast food brands", "casual dining", "fine dining", "coffee shops"],
-        "example_brands": ["McDonald's", "Starbucks", "Chipotle", "Olive Garden", "Domino's"],
-        "extraction_focus": "restaurant and dining recommendations",
-        "default_prompt": generate_default_prompt(
-            "Restaurants & Food Service",
-            "restaurant and dining recommendations",
-            ["restaurant chains", "fast food brands", "casual dining", "fine dining", "coffee shops"]
-        )
-    },
-    "airlines": {
-        "name": "Airlines & Aviation",
-        "description": "Track airline brands and aviation companies",
-        "entity_types": ["airlines", "aviation companies", "low-cost carriers", "premium airlines"],
-        "example_brands": ["Delta", "United", "American Airlines", "Southwest", "JetBlue", "Ryanair"],
-        "extraction_focus": "airline and flight recommendations",
-        "default_prompt": generate_default_prompt(
-            "Airlines & Aviation",
-            "airline and flight recommendations",
-            ["airlines", "aviation companies", "low-cost carriers", "premium airlines"]
-        )
-    },
-    "retail": {
-        "name": "Retail & Consumer Brands",
-        "description": "Track retail stores and consumer product brands",
-        "entity_types": ["retail stores", "e-commerce brands", "consumer products", "fashion brands"],
-        "example_brands": ["Amazon", "Walmart", "Target", "Nike", "Adidas", "Apple"],
-        "extraction_focus": "product and retail recommendations",
-        "default_prompt": generate_default_prompt(
-            "Retail & Consumer Brands",
-            "product and retail recommendations",
-            ["retail stores", "e-commerce brands", "consumer products", "fashion brands"]
-        )
-    },
-    "fashion": {
-        "name": "Fashion & Apparel",
-        "description": "Track fashion brands, clothing, and footwear",
-        "entity_types": ["fashion brands", "clothing brands", "footwear brands", "luxury brands", "sportswear"],
-        "example_brands": ["Nike", "Adidas", "Zara", "H&M", "Gucci", "Louis Vuitton", "Puma"],
-        "extraction_focus": "fashion and apparel recommendations",
-        "default_prompt": generate_default_prompt(
-            "Fashion & Apparel",
-            "fashion and apparel recommendations",
-            ["fashion brands", "clothing brands", "footwear brands", "luxury brands", "sportswear"]
-        )
-    },
-    "automotive": {
-        "name": "Automotive",
-        "description": "Track car brands and automotive companies",
-        "entity_types": ["car manufacturers", "automotive brands", "EV companies", "luxury car brands"],
-        "example_brands": ["Toyota", "Ford", "Tesla", "BMW", "Mercedes-Benz", "Honda"],
-        "extraction_focus": "vehicle and automotive recommendations",
-        "default_prompt": generate_default_prompt(
-            "Automotive",
-            "vehicle and automotive recommendations",
-            ["car manufacturers", "automotive brands", "EV companies", "luxury car brands"]
-        )
-    },
-    "technology": {
-        "name": "Technology & Software",
-        "description": "Track tech companies and software brands",
-        "entity_types": ["tech companies", "software brands", "SaaS products", "hardware brands"],
-        "example_brands": ["Apple", "Google", "Microsoft", "Amazon", "Meta", "Salesforce"],
-        "extraction_focus": "technology and software recommendations",
-        "default_prompt": generate_default_prompt(
-            "Technology & Software",
-            "technology and software recommendations",
-            ["tech companies", "software brands", "SaaS products", "hardware brands"]
-        )
-    },
-    "finance": {
-        "name": "Finance & Banking",
-        "description": "Track banks, financial services, and fintech",
-        "entity_types": ["banks", "credit card companies", "fintech", "insurance companies", "investment firms"],
-        "example_brands": ["Chase", "Bank of America", "PayPal", "Visa", "Mastercard", "Goldman Sachs"],
-        "extraction_focus": "financial service recommendations",
-        "default_prompt": generate_default_prompt(
-            "Finance & Banking",
-            "financial service recommendations",
-            ["banks", "credit card companies", "fintech", "insurance companies", "investment firms"]
-        )
-    },
-    "custom": {
-        "name": "Custom Industry",
-        "description": "Define your own industry and brand types",
-        "entity_types": [],
-        "example_brands": [],
-        "extraction_focus": "brand and company recommendations",
-        "default_prompt": generate_default_prompt(
-            "Custom Industry",
-            "brand and company recommendations",
-            ["brand names", "company names"]
-        )
+            preset["name"],
+            preset["extraction_focus"],
+            preset.get("entity_types", []),
+        ),
     }
-}
+
+
+def get_preset_with_prompt(industry_id: str) -> dict:
+    """Look up an industry preset and decorate it with its default prompt.
+
+    Uses `shared.industry_presets.get_preset` for the base lookup (which
+    falls back to ``custom`` on unknown ids).
+    """
+    return _preset_with_prompt(get_shared_preset(industry_id))
 
 
 def normalize_brand(name: str) -> str:
@@ -242,7 +164,7 @@ def expand_brands(existing_brands: list, industry: str = "hotels", brand_type: s
             "error": "Please add at least one brand first"
         }
 
-    industry_preset = INDUSTRY_PRESETS.get(industry, INDUSTRY_PRESETS.get("custom", {}))
+    industry_preset = get_shared_preset(industry)
     industry_name = industry_preset.get("name", "General")
     entity_types = industry_preset.get("entity_types", ["brands", "companies"])
 
@@ -353,7 +275,7 @@ def expand_brand(brand_name: str, industry: str = "hotels", existing_brands: lis
     if existing_brands is None:
         existing_brands = []
 
-    industry_preset = INDUSTRY_PRESETS.get(industry, INDUSTRY_PRESETS.get("custom", {}))
+    industry_preset = get_shared_preset(industry)
     industry_name = industry_preset.get("name", "General")
     entity_types = industry_preset.get("entity_types", ["brands", "companies"])
     example_brands = industry_preset.get("example_brands", [])
@@ -452,7 +374,7 @@ def find_competitors(first_party_brands: list, industry: str = "hotels", existin
     if existing_competitors is None:
         existing_competitors = []
 
-    industry_preset = INDUSTRY_PRESETS.get(industry, INDUSTRY_PRESETS.get("custom", {}))
+    industry_preset = get_shared_preset(industry)
     industry_name = industry_preset.get("name", "General")
     entity_types = industry_preset.get("entity_types", ["brands", "companies"])
     example_brands = industry_preset.get("example_brands", [])
@@ -564,8 +486,13 @@ def save_config(config: dict[str, Any]) -> dict[str, Any]:
 # --- Route Handlers ---
 
 def _get_presets(event: dict[str, Any], context: Any) -> dict[str, Any]:
-    """GET /brand-config/presets - Return industry presets."""
-    return success_response({'presets': INDUSTRY_PRESETS}, event)
+    """GET /brand-config/presets - Return industry presets decorated
+    with derived default prompts for the dashboard."""
+    presets_with_prompts = {
+        industry_id: _preset_with_prompt(preset)
+        for industry_id, preset in _BASE_PRESETS.items()
+    }
+    return success_response({'presets': presets_with_prompts}, event)
 
 
 @parse_json_body
@@ -644,9 +571,9 @@ def _get_config(event: dict[str, Any], context: Any) -> dict[str, Any]:
 def _save_config(event: dict[str, Any], context: Any, body: dict, industry: str) -> dict[str, Any]:
     """POST/PUT /brand-config - Create or update configuration."""
     # Validate industry
-    if industry not in INDUSTRY_PRESETS:
+    if industry not in _BASE_PRESETS:
         return validation_error(
-            f"Invalid industry. Must be one of: {', '.join(INDUSTRY_PRESETS.keys())}",
+            f"Invalid industry. Must be one of: {', '.join(_BASE_PRESETS.keys())}",
             event,
             'industry'
         )

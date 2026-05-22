@@ -11,6 +11,7 @@ Endpoints:
 - DELETE /content-studio/{id} - Delete generated content
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -22,6 +23,7 @@ from typing import Any
 
 import boto3
 from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 
 # Add shared module to path
 sys.path.insert(0, '/opt/python')
@@ -759,10 +761,63 @@ def parse_generated_content(text: str) -> dict[str, Any]:
     return result
 
 
-def create_pending_content(idea: dict[str, Any]) -> dict[str, Any]:
-    """Create a pending content record for async generation."""
+def _compute_idempotency_key(idea: dict[str, Any], window_minutes: int = 5) -> str:
+    """Compute a deterministic idempotency key for a generation request.
+
+    Same idea payload submitted within the same `window_minutes` bucket
+    produces the same key. Different windows produce different keys so a
+    user intentionally re-triggering hours later still gets a fresh run.
+
+    Bucketing to 5 minutes strikes a balance:
+    - Long enough to absorb API Gateway's default retries (which use short
+      exponential backoff, typically <1 minute apart) and accidental
+      client double-clicks.
+    - Short enough that a user who genuinely wants to regenerate doesn't
+      have to wait an inordinate time for a fresh `id`.
+
+    Inputs contributing to the hash:
+    - idea_id: uniquely identifies which idea card was clicked
+    - keyword: the business keyword (different keywords → different results)
+    - content_angle: the variant (comprehensive_guide vs reputation_management
+      etc.) — same idea + different angle legitimately needs a fresh id
+    - output_language: same rationale (different language → different output)
+    - Rounded timestamp bucket
+
+    Returns a 32-char hex string used as the DynamoDB primary key.
+    """
+    window_seconds = window_minutes * 60
+    now_ts = utc_now().timestamp()
+    bucket = int(now_ts // window_seconds)
+
+    payload = "|".join([
+        str(idea.get("id", "")),
+        str(idea.get("keyword", "")),
+        str(idea.get("content_angle", "")),
+        str(idea.get("output_language", "English")),
+        str(bucket),
+    ])
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return digest[:32]
+
+
+def create_pending_content(idea: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Create a pending content record for async generation.
+
+    Idempotent via a deterministic primary key derived from the idea payload
+    plus a short time bucket (see `_compute_idempotency_key`). API Gateway
+    retries and accidental client double-clicks within the window resolve
+    to the same row instead of spawning duplicate generations (audit #23).
+
+    Returns:
+        Tuple of ``(item, created)`` where ``created`` is True when this
+        call wrote a fresh row and False when an existing row already
+        satisfied the idempotency key. Callers use ``created`` to decide
+        whether to kick off the async generation — retries must NOT
+        re-invoke, otherwise the "fix" still leaves duplicate generations
+        running.
+    """
     table = dynamodb.Table(CONTENT_STUDIO_TABLE)
-    content_id = str(uuid.uuid4())
+    content_id = _compute_idempotency_key(idea)
     timestamp = get_timestamp()
 
     item = {
@@ -783,8 +838,33 @@ def create_pending_content(idea: dict[str, Any]) -> dict[str, Any]:
         'updated_at': timestamp
     }
 
-    table.put_item(Item=item)
-    return item
+    try:
+        # Conditional write — only create if this idempotency key is new.
+        table.put_item(
+            Item=item,
+            ConditionExpression='attribute_not_exists(id)',
+        )
+        return item, True
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') != 'ConditionalCheckFailedException':
+            raise
+        # A row already exists for this key. This is the retry/duplicate
+        # case — return the existing row so the caller hands the user the
+        # same content_id and skips the second async generation.
+        logger.info(
+            f"Idempotent hit for content_id={content_id}; "
+            "returning existing record instead of creating duplicate"
+        )
+        existing = table.get_item(Key={'id': content_id}).get('Item')
+        if existing is None:
+            # Extremely unlikely: someone deleted the row between put and get.
+            # Safer to re-raise so the client sees the error rather than
+            # silently producing a surprise new UUID.
+            raise RuntimeError(
+                f"Idempotent conflict on content_id={content_id} but item "
+                "disappeared on read"
+            )
+        return existing, False
 
 
 def update_content_status(content_id: str, status: str, generation_result: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -955,9 +1035,27 @@ def _generate_content(event: dict[str, Any], context: Any, body: dict, idea: dic
     if len(idea.get('keyword', '')) > 500:
         return validation_error('Keyword too long (max 500 characters)', event, 'keyword')
 
-    # Create pending record immediately
-    pending_content = create_pending_content(idea)
+    # Create pending record immediately. If an idempotency-key hit occurs
+    # (API Gateway retry or client double-click within the window), `created`
+    # is False and we must skip the async invocation — otherwise the
+    # generation still runs twice, defeating the idempotency fix.
+    pending_content, created = create_pending_content(idea)
     content_id = pending_content['id']
+
+    if not created:
+        existing_status = pending_content.get('status', 'pending')
+        logger.info(
+            f"Returning existing content_id={content_id} "
+            f"(status={existing_status}) without re-invoking generation"
+        )
+        return success_response({
+            'success': True,
+            'id': content_id,
+            'status': existing_status,
+            'message': 'Content generation already in progress. Poll /status/{id} for updates.',
+            'keyword': idea.get('keyword'),
+            'idempotent_hit': True,
+        }, event)
 
     # Get the current function name for async invocation
     function_name = os.environ.get('AWS_LAMBDA_FUNCTION_NAME', '')
