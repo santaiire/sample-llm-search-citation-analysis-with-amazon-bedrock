@@ -17,7 +17,7 @@ import logging
 import os
 import sys
 from collections import defaultdict
-from typing import Any
+from typing import Any, Dict, List
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -31,7 +31,7 @@ from shared.api_response import success_response
 from shared.decorators import api_handler, validate
 from shared.llm_json import parse_llm_json
 from shared.models import ModelRole, invoke_bedrock
-from shared.utils import brand_names_match, get_brand_config, get_timestamp
+from shared.utils import brand_names_match, get_brand_config, get_timestamp, recommendation_id
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -304,6 +304,52 @@ Focus on:
     return []
 
 
+def _annotate_with_status(recommendations: List[Dict[str, Any]]) -> None:
+    """
+    Mutate each recommendation in place to add `id` + persisted status.
+
+    The id is the same hash that `recommendation-status.py` looks up in
+    DynamoDB. The status fields are merged in only when the status
+    table is configured (production); otherwise every recommendation
+    gets `status: 'new'` so the response shape stays consistent for
+    the frontend.
+
+    Failure to load the status table is non-fatal: the recommendations
+    are still surfaced, just without per-row tracking. Logged warning.
+    """
+    for rec in recommendations:
+        rec['id'] = recommendation_id(rec)
+
+    rec_ids = [r['id'] for r in recommendations]
+    statuses: Dict[str, Dict[str, Any]] = {}
+
+    status_table = os.environ.get('RECOMMENDATION_STATUS_TABLE')
+    if status_table and rec_ids:
+        try:
+            # Lazy-load the status helper so this module's existing tests
+            # (which don't configure the status table env) keep passing.
+            import importlib.util
+            here = os.path.dirname(os.path.abspath(__file__))
+            spec = importlib.util.spec_from_file_location(
+                'recommendation_status_for_join',
+                os.path.join(here, 'recommendation-status.py'),
+            )
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            statuses = module.list_statuses(rec_ids)
+        except Exception as exc:
+            logger.warning(f'recommendation status join skipped: {exc}')
+
+    for rec in recommendations:
+        row = statuses.get(rec['id'])
+        rec['status'] = row.get('status', 'new') if row else 'new'
+        if row:
+            for key in ('updated_at', 'completed_at', 'notes',
+                        'related_keyword', 'related_content_id'):
+                if key in row:
+                    rec[key] = row[key]
+
+
 @api_handler
 @validate({
     'use_llm': {'type': bool, 'default': False},
@@ -321,6 +367,14 @@ def handler(event: dict[str, Any], context: Any, use_llm: bool = False, keyword:
 
     # Generate rule-based recommendations
     recommendations = generate_rule_based_recommendations(config)
+
+    # Annotate each recommendation with a deterministic id and (when the
+    # status table is configured) the persisted action-tracking state.
+    # Done here rather than inside `generate_rule_based_recommendations`
+    # so the rule generator stays a pure data shaper. The id is computed
+    # from `type + title + sorted keywords` so it survives list
+    # regeneration as long as those fields don't change.
+    _annotate_with_status(recommendations)
 
     # Optionally enhance with LLM
     llm_recommendations = []
