@@ -514,3 +514,77 @@
 .dark [data-amplify-authenticator] [data-amplify-router-content] {
   background-color: rgb(31 41 55); /* gray-800 */
 }
+
+/* ----------------------------------------------------------------------- */
+/*  Print mode                                                             */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * `print-mode` is added to <body>'s direct child <div> by App.tsx when the
+ * URL contains `?print=1`. It signals "remove navigation chrome and prep for
+ * a paper/PDF screenshot" even before the actual `@media print` rules kick
+ * in (so the new tab looks like a print preview on screen too).
+ */
+.print-mode .print-hidden {
+  display: none !important;
+}
+
+.print-mode {
+  /* Preserve background colors of charts, badges, and stat cards in PDF
+     output instead of stripping them to white. */
+  print-color-adjust: exact;
+  -webkit-print-color-adjust: exact;
+}
+
+.print-mode .print-header {
+  margin-bottom: 0.5rem;
+}
+
+@media print {
+  /* Hide every element marked .print-hidden anywhere in the tree, even
+     outside of print-mode (modal portals, debug panels, etc.). */
+  .print-hidden,
+  [data-print-hidden="true"] {
+    display: none !important;
+  }
+
+  /* Page breaks helpers. Add `.page-break-before` to a section to start it
+     on a fresh page; `.avoid-break-inside` keeps a card together. */
+  .page-break-before {
+    break-before: page;
+  }
+  .avoid-break-inside {
+    break-inside: avoid;
+  }
+
+  /* Color preservation across all print contexts. */
+  * {
+    print-color-adjust: exact !important;
+    -webkit-print-color-adjust: exact !important;
+  }
+
+  /* Remove sticky positioning so headers don't repeat awkwardly mid-page. */
+  .sticky {
+    position: static !important;
+  }
+
+  /* Force charts to a printable size — on paper, full-width with capped
+     height keeps them legible. */
+  canvas {
+    max-width: 100% !important;
+    height: auto !important;
+  }
+
+  /* Light background regardless of the saved theme so PDFs are readable
+     when printed on white paper. */
+  body,
+  .print-mode {
+    background: white !important;
+    color: black !important;
+  }
+
+  /* Default page margins; the browser print dialog can override these. */
+  @page {
+    margin: 0.5in;
+  }
+}
