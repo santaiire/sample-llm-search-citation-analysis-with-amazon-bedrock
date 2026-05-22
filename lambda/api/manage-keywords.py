@@ -4,18 +4,19 @@ Manage Keywords API Lambda
 Handles POST, PUT, DELETE operations for keywords.
 """
 
-import boto3
+import logging
 import os
 import sys
-import logging
-from datetime import datetime
 import uuid
+
+import boto3
 
 # Add shared module to path
 sys.path.insert(0, '/opt/python')
 
-from shared.decorators import api_handler, parse_json_body, validate
 from shared.api_response import success_response, validation_error
+from shared.decorators import api_handler, parse_json_body, validate
+from shared.utils import get_timestamp
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -38,7 +39,7 @@ def handler(event, context):
     # which @route_handler doesn't handle automatically
     method = event.get('httpMethod')
     path_params = event.get('pathParameters') or {}
-    
+
     if method == 'POST':
         return create_keyword(event, context)
     elif method == 'PUT':
@@ -61,8 +62,8 @@ def handler(event, context):
 def create_keyword(event, context, body, keyword, region, language, category, priority, notes):
     """Create a new keyword with optional region/language support."""
     keyword_id = str(uuid.uuid4())
-    timestamp = datetime.utcnow().isoformat() + 'Z'
-    
+    timestamp = get_timestamp()
+
     item = {
         'id': keyword_id,
         'keyword': keyword,
@@ -75,9 +76,9 @@ def create_keyword(event, context, body, keyword, region, language, category, pr
         'priority': priority,
         'notes': notes
     }
-    
+
     keywords_table.put_item(Item=item)
-    
+
     return success_response(item, event, 201)
 
 
@@ -95,9 +96,9 @@ def update_keyword(event, context, keyword_id, body, keyword, status, region, la
     """Update an existing keyword with region/language support."""
     if not keyword_id:
         return validation_error('Keyword ID is required', event, 'id')
-    
-    timestamp = datetime.utcnow().isoformat() + 'Z'
-    
+
+    timestamp = get_timestamp()
+
     # Build update expression dynamically for optional fields
     update_expr = 'SET keyword = :k, #s = :st, updated_at = :u'
     expr_names = {'#s': 'status'}
@@ -106,7 +107,7 @@ def update_keyword(event, context, keyword_id, body, keyword, status, region, la
         ':st': status,
         ':u': timestamp
     }
-    
+
     # Add optional fields if provided
     if region is not None:
         update_expr += ', #r = :r'
@@ -125,7 +126,7 @@ def update_keyword(event, context, keyword_id, body, keyword, status, region, la
     if notes is not None:
         update_expr += ', notes = :n'
         expr_values[':n'] = notes
-    
+
     # Update the item
     response = keywords_table.update_item(
         Key={'id': keyword_id},
@@ -134,7 +135,7 @@ def update_keyword(event, context, keyword_id, body, keyword, status, region, la
         ExpressionAttributeValues=expr_values,
         ReturnValues='ALL_NEW'
     )
-    
+
     return success_response(response['Attributes'], event)
 
 
@@ -142,7 +143,7 @@ def delete_keyword(event, context, keyword_id):
     """Delete a keyword."""
     if not keyword_id:
         return validation_error('Keyword ID is required', event, 'id')
-    
+
     keywords_table.delete_item(Key={'id': keyword_id})
-    
+
     return success_response({'message': 'Keyword deleted successfully'}, event)

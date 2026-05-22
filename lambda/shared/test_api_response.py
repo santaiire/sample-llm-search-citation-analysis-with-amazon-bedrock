@@ -9,9 +9,8 @@ Covers:
 import importlib
 import os
 import sys
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -34,10 +33,10 @@ def _reload_and_get_origin():
 class TestCORSFallbackProperty:
     """
     **Property 1: CORS fallback fails closed for non-dev environments**
-    
+
     For any value of ALLOW_DEV_CORS that is not case-insensitive "true",
     when CORS_ORIGIN_PARAM is also not set, get_cors_origin() returns empty string.
-    
+
     **Validates: Requirements 2.4**
     """
 

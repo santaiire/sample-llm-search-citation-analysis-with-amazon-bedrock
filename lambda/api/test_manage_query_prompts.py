@@ -6,12 +6,11 @@ Covers:
 - Validation ({keyword} placeholder, max prompts, field limits)
 """
 
+import importlib
 import json
 import os
 import sys
-import importlib
-from unittest.mock import patch, MagicMock
-from datetime import datetime
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -32,7 +31,8 @@ def _mock_boto3_resource(*args, **kwargs):
     return mock_dynamodb
 
 # Import the handler module (has hyphens in filename)
-import importlib.util
+import importlib.util  # noqa: E402
+
 _handler_spec = importlib.util.spec_from_file_location(
     'manage_query_prompts',
     os.path.join(os.path.dirname(__file__), 'manage-query-prompts.py')
@@ -110,7 +110,7 @@ class TestCreatePrompt:
             'template': 'Find me the best hotels',
         })
         result = handler_module.handler(event, {})
-        status, body = parse_response(result)
+        status, _ = parse_response(result)
         assert status == 400
 
     def test_create_exceeds_max_prompts(self, handler_module):
@@ -121,7 +121,7 @@ class TestCreatePrompt:
             'template': 'Find {keyword} please',
         })
         result = handler_module.handler(event, {})
-        status, body = parse_response(result)
+        status, _ = parse_response(result)
         assert status == 400
 
 
@@ -165,11 +165,11 @@ class TestTogglePrompt:
         }
         event = make_event('PATCH', path_params={'id': 'abc'})
         result = handler_module.handler(event, {})
-        status, body = parse_response(result)
+        status, _ = parse_response(result)
         assert status == 200
         # Verify the update was called with 'false'
         call_kwargs = mock_table.update_item.call_args
-        assert ':e' in call_kwargs.kwargs.get('ExpressionAttributeValues', call_kwargs[1].get('ExpressionAttributeValues', {}))
+        assert ':e' in call_kwargs.kwargs.get('ExpressionAttributeValues', {})
 
     def test_toggle_disabled_to_enabled(self, handler_module):
         """Toggling a disabled prompt enables it."""
@@ -181,7 +181,7 @@ class TestTogglePrompt:
         }
         event = make_event('PATCH', path_params={'id': 'abc'})
         result = handler_module.handler(event, {})
-        status, body = parse_response(result)
+        status, _ = parse_response(result)
         assert status == 200
 
     def test_toggle_nonexistent_prompt(self, handler_module):
@@ -200,7 +200,7 @@ class TestDeletePrompt:
         """Deleting a prompt succeeds."""
         event = make_event('DELETE', path_params={'id': 'abc'})
         result = handler_module.handler(event, {})
-        status, body = parse_response(result)
+        status, _ = parse_response(result)
         assert status == 200
         mock_table.delete_item.assert_called_once_with(Key={'id': 'abc'})
 

@@ -4,18 +4,19 @@ Get URL Breakdown API Lambda
 Returns keywords and providers that cited a specific URL.
 """
 
-import sys
 import logging
-import boto3
-from typing import Dict, Any, List
 import os
+import sys
+from typing import Any
 from urllib.parse import unquote
+
+import boto3
 
 # Add shared module to path
 sys.path.insert(0, '/opt/python')
 
-from shared.decorators import api_handler, validate
 from shared.api_response import success_response
+from shared.decorators import api_handler, validate
 from shared.utils import normalize_url
 
 logger = logging.getLogger(__name__)
@@ -45,19 +46,19 @@ def _urls_match(url1: str, url2: str) -> bool:
 @validate({
     'url': {'required': True, 'type': str, 'max_length': 2048}
 })
-def handler(event: Dict[str, Any], context: Any, url: str) -> Dict[str, Any]:
+def handler(event: dict[str, Any], context: Any, url: str) -> dict[str, Any]:
     """
     GET /api/url-breakdown?url=https://example.com
-    
+
     Returns breakdown of which keywords and providers cited this URL.
     """
     # URL decode in case it's encoded
     target_url = unquote(url)
     target_normalized = _normalize_for_comparison(target_url)
-    
+
     logger.info(f"Looking for URL: {target_url}")
     logger.info(f"Normalized target: {target_normalized}")
-    
+
     # Scan all search results with pagination
     # Note: For better performance at scale, consider adding a GSI on citations
     # or maintaining a separate URL-to-keyword mapping table
@@ -65,23 +66,23 @@ def handler(event: Dict[str, Any], context: Any, url: str) -> Dict[str, Any]:
     last_evaluated_key = None
     items_scanned = 0
     max_items = 5000  # Safety limit
-    
+
     while items_scanned < max_items:
         scan_params = {'Limit': 500}
         if last_evaluated_key:
             scan_params['ExclusiveStartKey'] = last_evaluated_key
-        
+
         response = search_results_table.scan(**scan_params)
         items = response.get('Items', [])
         items_scanned += len(items)
-        
+
         # Find all keyword-provider combinations that cited this URL
         for item in items:
             citations = item.get('citations', [])
             keyword = item.get('keyword', '')
             provider = item.get('provider', '')
             timestamp = item.get('timestamp', '')
-            
+
             # Check if this URL is in the citations (with normalized comparison)
             for citation in citations:
                 citation_url = citation if isinstance(citation, str) else citation.get('S', '')
@@ -92,17 +93,17 @@ def handler(event: Dict[str, Any], context: Any, url: str) -> Dict[str, Any]:
                         'timestamp': timestamp
                     })
                     break  # Only count once per search result
-        
+
         # Check if there are more items to scan
         last_evaluated_key = response.get('LastEvaluatedKey')
         if not last_evaluated_key:
             break
-    
+
     logger.info(f"Scanned {items_scanned} items, found {len(breakdown)} matches")
-    
+
     # Sort by timestamp (most recent first)
     breakdown.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
-    
+
     return success_response({
         'url': target_url,
         'total_citations': len(breakdown),

@@ -5,17 +5,18 @@ Create, update, delete EventBridge schedules for automated analysis runs.
 """
 
 import json
-import boto3
-import sys
 import logging
-from typing import Dict, Any
 import os
+import sys
+from typing import Any
+
+import boto3
 
 # Add shared module to path
 sys.path.insert(0, '/opt/python')
 
+from shared.api_response import api_response, error_response, not_found_response, success_response, validation_error
 from shared.decorators import api_handler, parse_json_body, validate
-from shared.api_response import success_response, validation_error, api_response, not_found_response, error_response
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -28,7 +29,7 @@ SCHEDULE_GROUP = 'citation-analysis-schedules'
 
 
 @api_handler
-def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """
     GET /api/schedules - List all schedules
     POST /api/schedules - Create a schedule
@@ -36,7 +37,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
     method = event.get('httpMethod')
     path_params = event.get('pathParameters') or {}
-    
+
     if method == 'GET':
         return list_schedules(event)
     elif method == 'POST':
@@ -48,7 +49,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         return validation_error('Method not allowed', event)
 
 
-def list_schedules(event: Dict[str, Any]) -> Dict[str, Any]:
+def list_schedules(event: dict[str, Any]) -> dict[str, Any]:
     """List all schedules."""
     try:
         # Ensure schedule group exists
@@ -56,12 +57,12 @@ def list_schedules(event: Dict[str, Any]) -> Dict[str, Any]:
             scheduler.get_schedule_group(Name=SCHEDULE_GROUP)
         except scheduler.exceptions.ResourceNotFoundException:
             scheduler.create_schedule_group(Name=SCHEDULE_GROUP)
-        
+
         response = scheduler.list_schedules(
             GroupName=SCHEDULE_GROUP,
             MaxResults=50
         )
-        
+
         schedules = []
         for schedule in response.get('Schedules', []):
             # Get full schedule details
@@ -69,7 +70,7 @@ def list_schedules(event: Dict[str, Any]) -> Dict[str, Any]:
                 Name=schedule['Name'],
                 GroupName=SCHEDULE_GROUP
             )
-            
+
             schedules.append({
                 'name': detail['Name'],
                 'schedule': detail['ScheduleExpression'],
@@ -77,10 +78,10 @@ def list_schedules(event: Dict[str, Any]) -> Dict[str, Any]:
                 'timezone': detail.get('ScheduleExpressionTimezone', 'UTC'),
                 'description': detail.get('Description', '')
             })
-        
+
         return success_response({'schedules': schedules}, event)
     except Exception as e:
-        logger.error(f"Error listing schedules: {str(e)}")
+        logger.error(f"Error listing schedules: {e!s}")
         return error_response(e, event)
 
 
@@ -94,21 +95,21 @@ def list_schedules(event: Dict[str, Any]) -> Dict[str, Any]:
     'day_of_week': {'type': str, 'choices': ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'], 'default': 'MON'},
     'day_of_month': {'type': str, 'default': '1'},
 })
-def _create_schedule_handler(event: Dict[str, Any], context: Any, body: Dict[str, Any],
+def _create_schedule_handler(event: dict[str, Any], context: Any, body: dict[str, Any],
                               name: str, frequency: str, time: str, timezone: str,
-                              enabled: bool, day_of_week: str, day_of_month: str) -> Dict[str, Any]:
+                              enabled: bool, day_of_week: str, day_of_month: str) -> dict[str, Any]:
     """Create a new schedule."""
     # Validate time format (HH:MM)
     if not time or len(time) != 5 or ':' not in time:
         return validation_error('Invalid time format. Use HH:MM', event, 'time')
-    
+
     try:
         hour, minute = time.split(':')
         int(hour)  # Validate it's a number
         int(minute)
     except (ValueError, AttributeError):
         return validation_error('Invalid time format. Use HH:MM', event, 'time')
-    
+
     # Build cron expression based on frequency
     if frequency == 'daily':
         cron_expr = f"cron({minute} {hour} * * ? *)"
@@ -125,13 +126,13 @@ def _create_schedule_handler(event: Dict[str, Any], context: Any, body: Dict[str
     else:
         # This shouldn't happen due to @validate choices, but kept for safety
         return validation_error('Invalid frequency. Use: daily, weekly, or monthly', event, 'frequency')
-    
+
     # Ensure schedule group exists
     try:
         scheduler.get_schedule_group(Name=SCHEDULE_GROUP)
     except scheduler.exceptions.ResourceNotFoundException:
         scheduler.create_schedule_group(Name=SCHEDULE_GROUP)
-    
+
     # Create schedule
     try:
         scheduler.create_schedule(
@@ -148,7 +149,7 @@ def _create_schedule_handler(event: Dict[str, Any], context: Any, body: Dict[str
                 'Input': json.dumps({'source': 'dynamodb'})
             }
         )
-        
+
         return success_response({
             'message': 'Schedule created successfully',
             'name': name,
@@ -159,17 +160,17 @@ def _create_schedule_handler(event: Dict[str, Any], context: Any, body: Dict[str
         return api_response(409, {'error': 'Schedule with this name already exists'}, event)
 
 
-def delete_schedule(schedule_name: str, event: Dict[str, Any]) -> Dict[str, Any]:
+def delete_schedule(schedule_name: str, event: dict[str, Any]) -> dict[str, Any]:
     """Delete a schedule."""
     if not schedule_name:
         return validation_error('Schedule name is required', event, 'name')
-    
+
     try:
         scheduler.delete_schedule(
             Name=schedule_name,
             GroupName=SCHEDULE_GROUP
         )
-        
+
         return success_response({'message': 'Schedule deleted successfully'}, event)
     except scheduler.exceptions.ResourceNotFoundException:
         return not_found_response('Schedule', event)

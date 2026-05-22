@@ -5,17 +5,18 @@ Returns the status and history of a Step Functions execution.
 """
 
 import json
-import sys
 import logging
-import boto3
-from typing import Dict, Any
+import sys
+from typing import Any
 from urllib.parse import unquote
+
+import boto3
 
 # Add shared module to path
 sys.path.insert(0, '/opt/python')
 
+from shared.api_response import not_found_response, success_response, validation_error
 from shared.decorators import api_handler, validate
-from shared.api_response import success_response, validation_error, not_found_response
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -28,84 +29,91 @@ stepfunctions = boto3.client('stepfunctions')
     'id': {'source': 'path', 'type': str, 'max_length': 2048},
     'stateMachineArn': {'source': 'query', 'type': str, 'max_length': 256}
 })
-def handler(event: Dict[str, Any], context: Any, id: str = None, stateMachineArn: str = None) -> Dict[str, Any]:
+def handler(event: dict[str, Any], context: Any, id: str | None = None, stateMachineArn: str | None = None) -> dict[str, Any]:
     """
     GET /api/executions/{executionArn}
     GET /api/executions/latest
-    
+
     Returns execution status and event history.
     """
     # URL decode the execution ID
     execution_id = unquote(id) if id else None
-    
+
     if execution_id == 'latest':
         # Get the latest execution
         if not stateMachineArn:
             return validation_error('stateMachineArn query parameter required', event, 'stateMachineArn')
-        
+
         executions = stepfunctions.list_executions(
             stateMachineArn=stateMachineArn,
             maxResults=1
         )
-        
+
         if not executions.get('executions'):
             return not_found_response('Executions', event)
-        
+
         execution_arn = executions['executions'][0]['executionArn']
     else:
         # Decode execution ARN from base64 or use directly
         execution_arn = execution_id
-        
+
     # Get execution details
     execution = stepfunctions.describe_execution(executionArn=execution_arn)
-    
+
     # Get execution history
     history = stepfunctions.get_execution_history(
         executionArn=execution_arn,
         maxResults=100,
         reverseOrder=True
     )
-    
+
     # Parse events to extract useful information
     # Track current state from TaskStateEntered events
     current_state_by_event_id = {}
     events = []
-    
+
+    all_events = history.get('events', [])
+
+    # Build an event_id → event dict ONCE so find_state_name is O(depth)
+    # per lookup instead of O(n) — the whole pass was O(n²) before this.
+    # See audit item 15.
+    events_by_id = {e['id']: e for e in all_events}
+
     # First pass: build state mapping from TaskStateEntered events
-    for evt in history.get('events', []):
+    for evt in all_events:
         if evt['type'] == 'TaskStateEntered':
             details = evt.get('stateEnteredEventDetails', {})
             state_name = details.get('name', '')
             # Map this event ID to subsequent events
             current_state_by_event_id[evt['id']] = state_name
-    
+
     # Helper to find state name from event chain
     def find_state_name(event_id, depth=0):
         if depth > 10 or event_id is None:
             return None
         if event_id in current_state_by_event_id:
             return current_state_by_event_id[event_id]
-        # Look for the event with this ID
-        for e in history.get('events', []):
-            if e['id'] == event_id:
-                return find_state_name(e.get('previousEventId'), depth + 1)
-        return None
-    
+        # O(1) lookup via events_by_id; recurse up the previousEventId chain.
+        parent = events_by_id.get(event_id)
+        if parent is None:
+            return None
+        return find_state_name(parent.get('previousEventId'), depth + 1)
+
     # Track seen messages to avoid duplicates
     seen_messages = set()
-    
+
     # Second pass: process all events
-    for evt in history.get('events', []):
+    for evt in all_events:
         event_type = evt['type']
         timestamp = evt['timestamp'].isoformat()
         previous_event_id = evt.get('previousEventId')
-        
+
         event_info = {
             'id': evt['id'],
             'type': event_type,
             'timestamp': timestamp
         }
-        
+
         # Skip noisy/redundant event types
         skip_types = {
             'TaskScheduled',      # Redundant with TaskStarted
@@ -116,7 +124,7 @@ def handler(event: Dict[str, Any], context: Any, id: str = None, stateMachineArn
         }
         if event_type in skip_types:
             continue
-        
+
         if event_type == 'TaskStarted':
             state_name = find_state_name(previous_event_id)
             if state_name:
@@ -132,7 +140,7 @@ def handler(event: Dict[str, Any], context: Any, id: str = None, stateMachineArn
                 event_info['message'] = state_messages.get(state_name, f"Running {state_name}")
             else:
                 event_info['message'] = "Task started"
-        
+
         elif event_type == 'TaskSucceeded':
             details = evt.get('taskSucceededEventDetails', {})
             state_name = find_state_name(previous_event_id)
@@ -162,7 +170,7 @@ def handler(event: Dict[str, Any], context: Any, id: str = None, stateMachineArn
                     event_info['details'] = f"{len(results)} providers, {total_citations} citations"
             except (json.JSONDecodeError, KeyError, TypeError):
                 pass
-        
+
         elif event_type == 'TaskFailed':
             details = evt.get('taskFailedEventDetails', {})
             state_name = find_state_name(previous_event_id)
@@ -174,11 +182,11 @@ def handler(event: Dict[str, Any], context: Any, id: str = None, stateMachineArn
             if cause:
                 # Truncate long error causes
                 event_info['cause'] = cause[:200] + '...' if len(cause) > 200 else cause
-        
+
         elif event_type == 'TaskStateEntered':
             # Skip - redundant with TaskStarted which has better context
             continue
-        
+
         elif event_type == 'TaskStateExited':
             # Important for tracking step completion
             details = evt.get('stateExitedEventDetails', {})
@@ -193,11 +201,11 @@ def handler(event: Dict[str, Any], context: Any, id: str = None, stateMachineArn
                 'GenerateSummary': 'Summary generated',
             }
             event_info['message'] = state_messages.get(state_name)
-        
+
         elif event_type == 'MapStateStarted':
             event_info['message'] = "Processing keywords in parallel"
             event_info['state_name'] = 'ProcessKeywords'
-        
+
         elif event_type == 'MapStateExited':
             details = evt.get('stateExitedEventDetails', {})
             state_name = details.get('name', '')
@@ -209,17 +217,17 @@ def handler(event: Dict[str, Any], context: Any, id: str = None, stateMachineArn
                 event_info['message'] = "All citations crawled"
             else:
                 event_info['message'] = f"Completed: {state_name}"
-        
+
         elif event_type == 'ExecutionFailed':
             details = evt.get('executionFailedEventDetails', {})
             event_info['message'] = "Execution failed"
             event_info['error'] = details.get('error', 'Unknown error')
-        
+
         elif event_type == 'ExecutionSucceeded':
             event_info['message'] = "Execution completed successfully"
-        
+
         events.append(event_info)
-    
+
     # Filter out events without messages and deduplicate by message
     display_events = []
     for e in events:
@@ -231,7 +239,7 @@ def handler(event: Dict[str, Any], context: Any, id: str = None, stateMachineArn
         if dedup_key not in seen_messages:
             seen_messages.add(dedup_key)
             display_events.append(e)
-    
+
     return success_response({
         'execution': {
             'arn': execution['executionArn'],

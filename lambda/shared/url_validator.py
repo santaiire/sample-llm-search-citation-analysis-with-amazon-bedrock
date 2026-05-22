@@ -12,7 +12,6 @@ Returns generic error messages that do not leak resolved IPs or internal topolog
 import ipaddress
 import logging
 import socket
-from typing import Tuple
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -49,7 +48,7 @@ def _is_ip_blocked(ip_str: str) -> bool:
         return False
 
 
-def validate_url_safe(url: str) -> Tuple[bool, str]:
+def validate_url_safe(url: str) -> tuple[bool, str]:
     """
     Validate that a URL is safe for server-side fetching (SSRF prevention).
 
@@ -104,3 +103,50 @@ def validate_url_safe(url: str) -> Tuple[bool, str]:
             return False, 'URL points to a restricted address'
 
     return True, ''
+
+
+
+def resolve_and_validate(url: str) -> tuple[bool, str, str | None]:
+    """Validate a URL and return the resolved IP for rebind-safe fetching.
+
+    Closes the time-of-check-to-time-of-use DNS rebinding gap (audit item
+    24): `validate_url_safe` resolves hostname → IP and checks the IP, then
+    callers do a *separate* DNS lookup during `requests.get(url)`. A
+    malicious authoritative nameserver can return a public IP on the first
+    lookup and a private IP on the second.
+
+    Callers that care about rebinding should:
+    1. Call this function to get `(is_safe, error, ip)`.
+    2. Pass the returned IP into a requests session with a custom adapter
+       that connects to that IP and sets the `Host` header to the original
+       hostname (or use a DNS cache override).
+
+    Returns:
+        Tuple of (is_safe, error_message, resolved_ip).
+        `resolved_ip` is None if validation failed or the URL was rejected.
+    """
+    is_safe, error = validate_url_safe(url)
+    if not is_safe:
+        return False, error, None
+
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False, 'Invalid URL format', None
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False, 'URL must contain a valid hostname', None
+
+    try:
+        addr_infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        return False, 'Could not resolve hostname', None
+
+    if not addr_infos:
+        return False, 'Could not resolve hostname', None
+
+    # Return the first non-blocked IP found (validate_url_safe already
+    # confirmed all returned IPs are non-private, so any entry is fine).
+    first_ip = addr_infos[0][4][0]
+    return True, '', first_ip

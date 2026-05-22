@@ -10,47 +10,42 @@ This package contains common code used across all Lambda functions:
 
 __version__ = "1.0.0"
 
+from .api_response import (
+    DecimalEncoder,
+    api_response,
+    error_response,
+    get_cors_headers,
+    get_cors_origin,
+    not_found_response,
+    sanitize_error_message,
+    success_response,
+    validation_error,
+)
 from .config import LambdaConfig
 from .utils import (
-    normalize_url,
-    get_timestamp,
-    safe_json_dumps,
-    safe_json_loads,
-    truncate_text,
+    brand_names_match,
     extract_domain,
-    create_error_response,
-    create_success_response,
-)
-from .api_response import (
-    get_cors_origin,
-    get_cors_headers,
-    sanitize_error_message,
-    api_response,
-    success_response,
-    error_response,
-    validation_error,
-    not_found_response,
-    DecimalEncoder,
+    get_timestamp,
+    get_timestamp_compact,
+    normalize_url,
+    utc_now,
 )
 
 __all__ = [
-    "LambdaConfig",
-    "normalize_url",
-    "get_timestamp",
-    "safe_json_dumps",
-    "safe_json_loads",
-    "truncate_text",
-    "extract_domain",
-    "create_error_response",
-    "create_success_response",
-    # API Response utilities
-    "get_cors_origin",
-    "get_cors_headers",
-    "sanitize_error_message",
-    "api_response",
-    "success_response",
-    "error_response",
-    "validation_error",
-    "not_found_response",
     "DecimalEncoder",
+    "LambdaConfig",
+    "api_response",
+    "brand_names_match",
+    "error_response",
+    "extract_domain",
+    "get_cors_headers",
+    "get_cors_origin",
+    "get_timestamp",
+    "get_timestamp_compact",
+    "normalize_url",
+    "not_found_response",
+    "sanitize_error_message",
+    "success_response",
+    "utc_now",
+    "validation_error",
 ]
