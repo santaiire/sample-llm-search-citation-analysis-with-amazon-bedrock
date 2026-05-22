@@ -22,6 +22,10 @@ const ContentActionPlanReport = lazy(() =>
   import('./ContentActionPlanReport').then((m) => ({default: m.ContentActionPlanReport,})),
 );
 
+const BrandVisibilityReport = lazy(() =>
+  import('./BrandVisibilityReport').then((m) => ({default: m.BrandVisibilityReport,})),
+);
+
 interface Props {readonly keywords: ReadonlyArray<Keyword>;}
 
 function ReportFallback() {
@@ -60,6 +64,14 @@ export function ReportsRouter({ keywords }: Props) {
           <Route
             path="/reports/content-action-plan"
             element={<ContentActionPlanReport />}
+          />
+          <Route
+            path="/reports/visibility"
+            element={<BrandVisibilityReport keywords={keywords} />}
+          />
+          <Route
+            path="/reports/visibility/:keyword"
+            element={<BrandVisibilityReport keywords={keywords} />}
           />
           <Route path="*" element={<Navigate to="/reports" replace />} />
         </Routes>
