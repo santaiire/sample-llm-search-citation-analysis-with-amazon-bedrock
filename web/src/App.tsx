@@ -15,6 +15,7 @@ import { useExecutionPolling } from './hooks/useExecutionPolling';
 import { usePrintMode } from './hooks/usePrintMode';
 import { Sidebar } from './components/Layout/Sidebar';
 import { TabContent } from './components/Layout/TabContent';
+import { ReportsRouter } from './components/Reports/ReportsRouter';
 import { ConfirmModal } from './components/ui/Modal';
 import { AboutModal } from './components/About';
 import { ThemeToggle } from './components/ui/ThemeToggle';
@@ -43,6 +44,7 @@ const TAB_TO_PATH: Record<TabType, string> = {
   recommendations: '/recommendations',
   'keyword-research': '/keyword-research',
   'content-studio': '/content-studio',
+  reports: '/reports',
   searches: '/searches',
   'raw-responses': '/raw-responses',
   execution: '/execution',
@@ -57,6 +59,16 @@ const PATH_TO_TAB: Record<string, TabType> = Object.entries(TAB_TO_PATH).reduce<
   }),
   {}
 );
+
+/**
+ * Resolve a route pathname back to its TabType. Sub-paths under `/reports/`
+ * (e.g. `/reports/keyword/foo`) all resolve to the `reports` tab so the
+ * sidebar stays highlighted when navigating between individual reports.
+ */
+function resolveActiveTab(pathname: string): TabType {
+  if (pathname.startsWith('/reports')) return 'reports';
+  return PATH_TO_TAB[pathname] ?? 'dashboard';
+}
 
 function Login() {
   return (
@@ -123,6 +135,7 @@ const PAGE_TITLES: Record<TabType, string> = {
   'citation-gaps': 'Citation Gap Analysis',
   recommendations: 'Action Center',
   'content-studio': 'Content Studio',
+  reports: 'Reports',
   execution: 'Run Analysis',
   schedule: 'Schedule',
   'keyword-research': 'Keyword Research',
@@ -135,7 +148,8 @@ function MainApp() {
   const navigate = useNavigate();
   const location = useLocation();
   
-  const activeTab = PATH_TO_TAB[location.pathname] ?? 'dashboard';
+  const activeTab = resolveActiveTab(location.pathname);
+  const isReportRoute = location.pathname.startsWith('/reports');
   
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
@@ -152,8 +166,11 @@ function MainApp() {
   } = useExecutionPolling(refetch);
 
   // Print mode: when ?print=1 is in the URL we hide the sidebar/header chrome
-  // and auto-trigger the browser print dialog once data has loaded.
-  const { isPrintMode } = usePrintMode({ ready: !loading && Boolean(stats) });
+  // and auto-trigger the browser print dialog once data has loaded. On
+  // `/reports/*` routes we leave the auto-print scheduling to the report
+  // component itself, since report data is loaded inside the report (and is
+  // not represented by the dashboard's `stats` flag).
+  const { isPrintMode } = usePrintMode({ready: isReportRoute ? false : !loading && Boolean(stats),});
 
   // Clear rawResponsesPath when navigating away from raw-responses
   useEffect(() => {
@@ -231,75 +248,79 @@ function MainApp() {
           </header>
         ) : (
           <header className="h-16 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 sm:px-6 lg:px-8 sticky top-0 z-10">
-          <button
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="lg:hidden p-2 -ml-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
-          >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
-          </button>
-          <h1 className="text-lg sm:text-xl font-semibold text-gray-900 dark:text-white truncate">{PAGE_TITLES[activeTab]}</h1>
-          <div className="flex items-center gap-2 sm:gap-4">
-            <span className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 hidden sm:inline">
-              Last updated: {lastUpdate.toLocaleTimeString()}
-            </span>
-            {loading && (
-              <span className="text-sm text-gray-400 flex items-center gap-2">
-                <Spinner size="sm" />
-                <span className="hidden sm:inline">Refreshing</span>
+            <button
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="lg:hidden p-2 -ml-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+            <h1 className="text-lg sm:text-xl font-semibold text-gray-900 dark:text-white truncate">{PAGE_TITLES[activeTab]}</h1>
+            <div className="flex items-center gap-2 sm:gap-4">
+              <span className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 hidden sm:inline">
+                Last updated: {lastUpdate.toLocaleTimeString()}
               </span>
-            )}
-            <PrintToPdfButton />
-            <ThemeToggle />
-            <button
-              onClick={async () => {
-                try {
-                  await signOut();
-                } catch (error) {
-                  console.error('Sign out error:', error);
-                }
-              }}
-              className="px-3 py-1.5 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
-              title="Sign out"
-            >
-              <span className="hidden sm:inline">Sign Out</span>
-              <svg className="w-5 h-5 sm:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-              </svg>
-            </button>
-            <button
-              onClick={() => setShowAbout(true)}
-              className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
-              title="About this application"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </button>
-          </div>
-        </header>
+              {loading && (
+                <span className="text-sm text-gray-400 flex items-center gap-2">
+                  <Spinner size="sm" />
+                  <span className="hidden sm:inline">Refreshing</span>
+                </span>
+              )}
+              <PrintToPdfButton />
+              <ThemeToggle />
+              <button
+                onClick={async () => {
+                  try {
+                    await signOut();
+                  } catch (error) {
+                    console.error('Sign out error:', error);
+                  }
+                }}
+                className="px-3 py-1.5 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                title="Sign out"
+              >
+                <span className="hidden sm:inline">Sign Out</span>
+                <svg className="w-5 h-5 sm:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                </svg>
+              </button>
+              <button
+                onClick={() => setShowAbout(true)}
+                className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                title="About this application"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </button>
+            </div>
+          </header>
         )}
 
         <div className="p-4 sm:p-6 lg:p-8">
           <div className="max-w-7xl mx-auto">
-            <TabContent
-              activeTab={activeTab}
-              stats={stats}
-              citations={citations}
-              searches={searches}
-              keywords={keywords}
-              setKeywords={setKeywords}
-              schedules={schedules}
-              setSchedules={setSchedules}
-              execution={execution}
-              triggerAnalysis={triggerAnalysis}
-              startMonitoring={startMonitoring}
-              isRunning={isRunning}
-              rawResponsesPath={rawResponsesPath}
-              setActiveTab={setActiveTab}
-              onNavigateToRawResponses={handleNavigateToRawResponses}
-            />
+            {isReportRoute ? (
+              <ReportsRouter keywords={keywords} />
+            ) : (
+              <TabContent
+                activeTab={activeTab}
+                stats={stats}
+                citations={citations}
+                searches={searches}
+                keywords={keywords}
+                setKeywords={setKeywords}
+                schedules={schedules}
+                setSchedules={setSchedules}
+                execution={execution}
+                triggerAnalysis={triggerAnalysis}
+                startMonitoring={startMonitoring}
+                isRunning={isRunning}
+                rawResponsesPath={rawResponsesPath}
+                setActiveTab={setActiveTab}
+                onNavigateToRawResponses={handleNavigateToRawResponses}
+              />
+            )}
           </div>
         </div>
       </main>
