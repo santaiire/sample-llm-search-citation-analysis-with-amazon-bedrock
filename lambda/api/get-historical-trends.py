@@ -11,6 +11,7 @@ Features:
 - Provider-specific trends
 """
 
+import concurrent.futures
 import logging
 import os
 import sys
@@ -30,6 +31,11 @@ from shared.api_response import success_response
 from shared.decorators import api_handler, validate
 from shared.providers import get_enabled_provider_count
 from shared.utils import brand_names_match, get_brand_config, utc_now
+
+# Bounded parallelism for the per-keyword trend fan-out. 10 workers keeps the
+# DynamoDB RCU pressure reasonable on the SearchResults table while collapsing
+# 20 sequential queries into ~2 rounds of parallel work.
+_TRENDS_MAX_WORKERS = 10
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -162,22 +168,41 @@ def aggregate_by_period(items: list[dict], period: str, config: dict) -> list[di
     return trend_data
 
 
-def get_historical_trends(keyword: str, config: dict, period: str = 'day', days: int = 30) -> dict[str, Any]:
-    """Get historical trend data for a keyword."""
-    table = dynamodb.Table(SEARCH_RESULTS_TABLE)
+def _fetch_keyword_items(keyword: str) -> list[dict]:
+    """Fetch raw search-result rows for a keyword. Pulled out for parallel
+    fan-out in ``get_all_keywords_trends`` — the rest of ``get_historical_trends``
+    is CPU-bound aggregation that's safe to run serially afterwards.
 
-    # Query all results for keyword
-    response = table.query(
-        KeyConditionExpression=Key('keyword').eq(keyword)
-    )
-    items = response.get('Items', [])
+    Returns an empty list on query failure so a single bad keyword can't fail
+    the whole trends dashboard. Errors are logged for ops visibility.
+    """
+    try:
+        table = dynamodb.Table(SEARCH_RESULTS_TABLE)
+        response = table.query(KeyConditionExpression=Key('keyword').eq(keyword))
+        return response.get('Items', [])
+    except Exception as e:
+        logger.error(f"Error fetching trend items for keyword {keyword!r}: {e}")
+        return []
 
+
+def _build_trend_from_items(
+    keyword: str,
+    items: list[dict],
+    config: dict,
+    period: str,
+    days: int,
+) -> dict[str, Any]:
+    """Build the trend payload from an already-fetched items list.
+
+    Extracted from ``get_historical_trends`` so the parallel fan-out can
+    collect queries first, then run the CPU-bound aggregation serially
+    on the main thread (avoiding the GIL contention that makes threading
+    unhelpful for pure-Python work).
+    """
     if not items:
         return {"error": f"No data found for keyword: {keyword}"}
 
     # Filter to requested time range.
-    # Use a naive cutoff so the ISO string compares lexicographically against the
-    # stored 'Z'-suffixed timestamps (e.g. '2026-04-18T12:34:56.789012Z').
     cutoff = utc_now().replace(tzinfo=None) - timedelta(days=days)
     cutoff_str = cutoff.isoformat()
 
@@ -230,8 +255,25 @@ def get_historical_trends(keyword: str, config: dict, period: str = 'day', days:
     }
 
 
+def get_historical_trends(keyword: str, config: dict, period: str = 'day', days: int = 30) -> dict[str, Any]:
+    """Get historical trend data for a keyword.
+
+    Single-keyword entry point. Fetches + aggregates inline. For multi-keyword
+    dashboards use ``get_all_keywords_trends``, which parallelizes the query
+    step via ``_fetch_keyword_items``.
+    """
+    items = _fetch_keyword_items(keyword)
+    return _build_trend_from_items(keyword, items, config, period, days)
+
+
 def get_all_keywords_trends(config: dict, period: str = 'day', days: int = 30) -> dict[str, Any]:
-    """Get trend summary across all keywords."""
+    """Get trend summary across all keywords.
+
+    DynamoDB queries are parallelized across up to ``_TRENDS_MAX_WORKERS``
+    workers to collapse the previous N sequential queries (audit item 16).
+    Aggregation runs serially afterwards on the main thread — it's pure
+    Python and the GIL makes threading unhelpful for that phase.
+    """
     # Get keywords from the Keywords table instead of scanning SearchResults
     # This is more efficient as Keywords table is small and purpose-built
     keywords_table_name = os.environ.get('DYNAMODB_TABLE_KEYWORDS')
@@ -248,10 +290,49 @@ def get_all_keywords_trends(config: dict, period: str = 'day', days: int = 30) -
         response = table.scan(ProjectionExpression='keyword', Limit=500)
         keywords = list(set(item.get('keyword', '') for item in response.get('Items', []) if item.get('keyword')))
 
-    keyword_trends = []
+    # Cap fan-out at 20 keywords — matches the previous behavior so the
+    # dashboard's perceived breadth doesn't change, and bounds DynamoDB
+    # RCU + Lambda CPU cost.
+    keywords_to_query = keywords[:20]
+    if not keywords_to_query:
+        return {
+            'period_type': period,
+            'days_analyzed': days,
+            'keywords_analyzed': 0,
+            'keyword_trends': [],
+            'overall': {
+                'improving_count': 0,
+                'declining_count': 0,
+                'stable_count': 0,
+                'avg_score': 0,
+            }
+        }
 
-    for keyword in keywords[:20]:  # Limit to 20 keywords
-        trend = get_historical_trends(keyword, config, period, days)
+    # Phase 1: parallel DynamoDB queries.
+    workers = min(_TRENDS_MAX_WORKERS, len(keywords_to_query))
+    items_by_keyword: dict[str, list[dict]] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        future_to_keyword = {
+            pool.submit(_fetch_keyword_items, kw): kw
+            for kw in keywords_to_query
+        }
+        for future in concurrent.futures.as_completed(future_to_keyword):
+            kw = future_to_keyword[future]
+            try:
+                items_by_keyword[kw] = future.result()
+            except Exception as e:
+                # _fetch_keyword_items already catches and logs, but pool
+                # propagation quirks (e.g. interpreter shutdown) could still
+                # raise. Default to empty so aggregation treats it as
+                # "no data for this keyword".
+                logger.error(f"Trend fan-out future failed for {kw!r}: {e}")
+                items_by_keyword[kw] = []
+
+    # Phase 2: CPU-bound aggregation, serial on the main thread.
+    keyword_trends = []
+    for keyword in keywords_to_query:
+        items = items_by_keyword.get(keyword, [])
+        trend = _build_trend_from_items(keyword, items, config, period, days)
         if 'error' not in trend:
             keyword_trends.append({
                 'keyword': keyword,
