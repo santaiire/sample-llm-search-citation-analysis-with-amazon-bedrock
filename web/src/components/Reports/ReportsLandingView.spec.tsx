@@ -61,10 +61,16 @@ describe('ReportsLandingView', () => {
     expect(link).toHaveAttribute('href', '/reports/executive-summary');
   });
 
-  it('marks the one unbuilt report as Coming soon and not as a link', () => {
+  it('renders Competitor Gap as a working link to /reports/competitor', () => {
     renderLanding();
-    const comingSoonBadges = screen.getAllByText(/coming soon/i);
-    expect(comingSoonBadges).toHaveLength(1);
+    const link = screen.getByRole('link', { name: /competitor gap/i });
+    expect(link).toHaveAttribute('href', '/reports/competitor');
+  });
+
+  it('lists every report as available with a working link', () => {
+    renderLanding();
+    const comingSoonBadges = screen.queryAllByText(/coming soon/i);
+    expect(comingSoonBadges).toHaveLength(0);
   });
 
   it('shows the executive and marketing-lead audiences', () => {
