@@ -18,8 +18,9 @@ export const IndustrySelector = ({
   onIndustryChange,
 }: IndustrySelectorProps) => (
   <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-    <h3 className="text-sm font-semibold text-gray-900 mb-3">Industry</h3>
+    <label htmlFor="industry-select" className="block text-sm font-semibold text-gray-900 mb-3">Industry</label>
     <select
+      id="industry-select"
       value={industry}
       onChange={(e) => onIndustryChange(e.target.value)}
       className="w-full p-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-gray-900 bg-white text-sm"

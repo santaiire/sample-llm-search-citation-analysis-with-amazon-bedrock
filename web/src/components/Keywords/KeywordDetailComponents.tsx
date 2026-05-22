@@ -1,4 +1,7 @@
 import type { Search } from '../../types';
+import {
+  ChevronDownIcon, CloseIcon 
+} from '../ui';
 
 export const providerColors: Record<string, {
   border: string;
@@ -128,56 +131,9 @@ function buildCitationFrequency(citationByProvider: Record<string, Record<string
     .slice(0, 10);
 }
 
-export const lineChartOptions = {
-  responsive: true,
-  plugins: {
-    legend: {
-      display: true,
-      position: 'bottom' as const 
-    },
-    tooltip: {
-      callbacks: {
-        label: (context: {
-          dataset: { label?: string };
-          parsed: { y: number | null } 
-        }) =>
-          `${context.dataset.label ?? ''}: ${context.parsed.y ?? 0} citations`,
-      },
-    },
-  },
-  scales: { y: { beginAtZero: true } },
-};
-
-export const barChartOptions = {
-  responsive: true,
-  plugins: {
-    legend: {
-      display: true,
-      position: 'bottom' as const 
-    },
-    tooltip: {
-      callbacks: {
-        label: (context: {
-          dataset: { label?: string };
-          parsed: { y: number | null } 
-        }) =>
-          `${context.dataset.label ?? ''}: ${context.parsed.y ?? 0}`,
-        footer: (tooltipItems: Array<{ parsed: { y: number | null } }>) => {
-          const total = tooltipItems.reduce((sum, item) => sum + (item.parsed.y ?? 0), 0);
-          return `Total: ${total}`;
-        },
-      },
-    },
-  },
-  scales: {
-    x: { stacked: true },
-    y: {
-      stacked: true,
-      beginAtZero: true,
-      ticks: { stepSize: 1 } 
-    },
-  },
-};
+export {
+  lineChartOptions, barChartOptions
+} from './KeywordDetailChartOptions';
 
 interface DetailHeaderProps {
   keyword: string;
@@ -200,9 +156,9 @@ export const DetailHeader = ({
     </div>
     <button
       onClick={onClose}
-      className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors text-sm shrink-0"
+      className="inline-flex items-center gap-1.5 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors text-sm shrink-0"
     >
-      ✕ Close
+      <CloseIcon className="w-3.5 h-3.5" />Close
     </button>
   </div>
 );
@@ -274,7 +230,9 @@ export const SearchItem = ({
           >
             {search.citations?.length ?? 0} citations
           </span>
-          <span className="text-gray-400">{isExpanded ? '▼' : '▶'}</span>
+          <span className="text-gray-400" aria-hidden="true">
+            <ChevronDownIcon className={`w-4 h-4 ${isExpanded ? '' : '-rotate-90'}`} />
+          </span>
         </div>
       </div>
 
@@ -360,9 +318,11 @@ const ResponseSection = ({
             e.stopPropagation();
             setExpandedResponse(expandedResponse === globalIdx ? null : globalIdx);
           }}
-          className="mt-2 text-xs text-gray-500 hover:text-gray-700 font-medium"
+          className="mt-2 inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 font-medium"
+          aria-expanded={expandedResponse === globalIdx}
         >
-          {expandedResponse === globalIdx ? '▲ Show less' : '▼ Show full response'}
+          <ChevronDownIcon className={`w-3 h-3 ${expandedResponse === globalIdx ? 'rotate-180' : ''}`} />
+          {expandedResponse === globalIdx ? 'Show less' : 'Show full response'}
         </button>
       )}
     </div>
