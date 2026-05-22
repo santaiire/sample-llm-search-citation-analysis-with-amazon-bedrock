@@ -1,6 +1,6 @@
 import type { BrandMentionsResponse } from '../../../../types';
 import { ReportSection } from '../../layout';
-import { SectionPlaceholder } from './SectionPlaceholder';
+import { SectionPlaceholder } from '../../layout/SectionPlaceholder';
 
 interface Props {
   readonly mentions: BrandMentionsResponse | null;

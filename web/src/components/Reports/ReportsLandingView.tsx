@@ -49,8 +49,8 @@ const REPORT_CATALOG: readonly ReportEntry[] = [
     description:
       'Prioritized citation gaps paired with AI-generated content briefs from Content Studio. Closes the loop from "we have a gap" to "here is the asset to fill it".',
     audience: 'Content strategist',
-    path: null,
-    status: 'coming-soon',
+    path: '/reports/content-action-plan',
+    status: 'available',
   },
   {
     id: 'keyword-deep-dive',

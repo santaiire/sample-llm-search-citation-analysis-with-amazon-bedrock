@@ -3,7 +3,7 @@ import type {
   CitationGapsResponse,
 } from '../../../../types';
 import { ReportSection } from '../../layout';
-import { SectionPlaceholder } from './SectionPlaceholder';
+import { SectionPlaceholder } from '../../layout/SectionPlaceholder';
 
 interface Props {
   readonly gaps: CitationGapsResponse | null;
