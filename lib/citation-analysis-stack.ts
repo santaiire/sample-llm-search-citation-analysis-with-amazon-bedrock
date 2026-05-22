@@ -1220,6 +1220,7 @@ export class CitationAnalysisStack extends cdk.Stack {
         'get-historical-trends.py',
         'get-reports-overview.py',
         'recommendation-status.py',
+        'get-reports-competitor.py',
       ]),
       layers: [sharedLayer],
       timeout: cdk.Duration.seconds(60),
@@ -1854,16 +1855,18 @@ export class CitationAnalysisStack extends cdk.Stack {
     const trendsResource = apiResource.addResource('trends');
     trendsResource.addMethod('GET', new apigateway.LambdaIntegration(statsInsightsFunction, integrationOptions), methodOptions);
 
-    // Reports aggregator endpoints
-    // /reports/overview returns the cross-keyword executive-summary rollup
-    // (top movers, improving/declining counts, top recommendations) used
-    // by the Executive Summary print report and the Brand Visibility
-    // all-keywords variant. Routed to the consolidated stats-insights
-    // Lambda so it shares the same hot container as /trends and
-    // /recommendations (which it composes).
+    // Reports aggregator endpoints. /reports/overview returns the
+    // cross-keyword executive-summary rollup; /reports/competitor
+    // returns the per-competitor rollup (outranked keywords,
+    // exclusive citation sources, prioritised outreach list).
+    // Both are routed to the consolidated stats-insights Lambda so
+    // they share the warm container with /trends, /recommendations,
+    // /visibility, and /citation-gaps which they compose.
     const reportsResource = apiResource.addResource('reports');
     const reportsOverviewResource = reportsResource.addResource('overview');
     reportsOverviewResource.addMethod('GET', new apigateway.LambdaIntegration(statsInsightsFunction, integrationOptions), methodOptions);
+    const reportsCompetitorResource = reportsResource.addResource('competitor');
+    reportsCompetitorResource.addMethod('GET', new apigateway.LambdaIntegration(statsInsightsFunction, integrationOptions), methodOptions);
 
     // Persona Rankings API Route
     const personaRankingsResource = apiResource.addResource('persona-rankings');

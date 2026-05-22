@@ -35,6 +35,7 @@ ROUTE_MAP = {
     '/api/recommendations': 'get-recommendations.py',
     '/api/trends': 'get-historical-trends.py',
     '/api/reports/overview': 'get-reports-overview.py',
+    '/api/reports/competitor': 'get-reports-competitor.py',
 }
 
 _handlers = HandlerLoader(__file__)
