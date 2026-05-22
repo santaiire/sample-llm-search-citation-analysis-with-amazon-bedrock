@@ -5,30 +5,38 @@ CRUD operations for query prompt templates with persona modifiers.
 Each prompt contains a {keyword} placeholder that gets substituted during analysis.
 """
 
-import json
+import logging
 import os
 import sys
-import logging
-from datetime import datetime
 import uuid
+
+import boto3
 
 # Add shared module to path
 sys.path.insert(0, '/opt/python')
 
-from shared.decorators import api_handler, parse_json_body, validate
 from shared.api_response import success_response, validation_error
+from shared.constants import MAX_QUERY_PROMPTS_DEFAULT
+from shared.decorators import api_handler, parse_json_body, validate
+from shared.env_vars import resolve_table_env
+from shared.utils import get_timestamp
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-import boto3
 dynamodb = boto3.resource('dynamodb')
 
-# Fail-fast: Required environment variables
-QUERY_PROMPTS_TABLE = os.environ['QUERY_PROMPTS_TABLE']
+# Fail-fast: Required environment variables (audit #12 canonical naming).
+QUERY_PROMPTS_TABLE = resolve_table_env(
+    'DYNAMODB_TABLE_QUERY_PROMPTS', 'QUERY_PROMPTS_TABLE',
+)
 query_prompts_table = dynamodb.Table(QUERY_PROMPTS_TABLE)
 
-MAX_PROMPTS = 10
+# Soft business cap — bounded per-user prompts. Override with
+# `MAX_QUERY_PROMPTS` env var at deploy time. Must be <= the scan Limit in
+# `list_prompts` below; bumping this without also raising the scan limit
+# would silently truncate the UI.
+MAX_PROMPTS = int(os.environ.get('MAX_QUERY_PROMPTS', MAX_QUERY_PROMPTS_DEFAULT))
 
 
 @api_handler
@@ -60,7 +68,10 @@ def handler(event, context):
 
 def list_prompts(event, context):
     """GET /api/query-prompts - List all query prompts."""
-    response = query_prompts_table.scan(Limit=50)
+    # Scan with headroom over MAX_PROMPTS so tuning the cap upward doesn't
+    # silently truncate the UI. 5x buffer is arbitrary but comfortable for
+    # the business-soft-cap scale.
+    response = query_prompts_table.scan(Limit=max(50, MAX_PROMPTS * 5))
     items = response.get('Items', [])
     # Sort by created_at descending
     items.sort(key=lambda x: x.get('created_at', ''), reverse=True)
@@ -89,7 +100,7 @@ def create_prompt(event, context, body, name, template, description):
         )
 
     prompt_id = str(uuid.uuid4())
-    timestamp = datetime.utcnow().isoformat() + 'Z'
+    timestamp = get_timestamp()
 
     item = {
         'id': prompt_id,
@@ -124,7 +135,7 @@ def update_prompt(event, context, prompt_id, body, name, template, description):
             'Template must contain {keyword} placeholder', event, 'template'
         )
 
-    timestamp = datetime.utcnow().isoformat() + 'Z'
+    timestamp = get_timestamp()
 
     update_expr = 'SET updated_at = :u'
     expr_values = {':u': timestamp}
@@ -176,7 +187,7 @@ def toggle_prompt(event, context, prompt_id):
         return validation_error('Query prompt not found', event, 'id')
 
     new_enabled = 'false' if item.get('enabled') == 'true' else 'true'
-    timestamp = datetime.utcnow().isoformat() + 'Z'
+    timestamp = get_timestamp()
 
     result = query_prompts_table.update_item(
         Key={'id': prompt_id},

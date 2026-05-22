@@ -133,7 +133,7 @@ export const HistoryScreenshot = ({ crawl }: { crawl: HistoryCrawl }) => {
           <img
             src={crawl.screenshot_url}
             alt={`Screenshot from ${formatDate(crawl.crawled_at)}`}
-            className="w-full border border-gray-300 rounded shadow-lg"
+            className="w-full border border-gray-300 rounded shadow-lg dark:brightness-90 dark:contrast-95"
           />
         ) : (
           <div className="flex items-center justify-center h-48 bg-gray-100 rounded border border-gray-200">

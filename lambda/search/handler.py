@@ -4,32 +4,35 @@ Queries multiple AI providers using direct HTTP API calls (no heavy SDKs).
 """
 
 import json
-import os
 import logging
-import time
+import os
 import re
-from typing import Dict, List, Any, Optional
-from datetime import datetime
+import time
 from decimal import Decimal
+from typing import Any
+
 import boto3
-from botocore.exceptions import ClientError
 
 # Import lightweight API clients
 from api_clients import (
-    OpenAIClient, PerplexityClient, GeminiClient, ClaudeClient,
-    extract_citations_from_response, clean_url
-)
-from search_clients import (
-    BraveSearchClient, TavilySearchClient, ExaSearchClient,
-    SerpAPIClient, FirecrawlSearchClient
+    ClaudeClient,
+    GeminiClient,
+    OpenAIClient,
+    PerplexityClient,
+    clean_url,
+    extract_citations_from_response,
 )
 from brand_extractor import extract_brands_from_response
+from search_clients import BraveSearchClient, ExaSearchClient, FirecrawlSearchClient, SerpAPIClient, TavilySearchClient
 
 # Import centralized provider constants and error handling
-from shared.config import Provider, ProviderType, LLM_PROVIDERS, SEARCH_PROVIDERS
+from shared.config import Provider
+from shared.prompt_safety import sanitize_user_input
 from shared.step_function_response import log_error
 
 # Configure logging
+from shared.utils import get_timestamp
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -51,17 +54,17 @@ s3_client = boto3.client('s3')
 
 # Load extraction config
 _extraction_config = None
-def get_extraction_config() -> Dict[str, Any]:
+def get_extraction_config() -> dict[str, Any]:
     """Load extraction config from file (cached)."""
     global _extraction_config
     if _extraction_config is None:
         try:
             config_path = os.path.join(os.path.dirname(__file__), 'extraction_config.json')
-            with open(config_path, 'r') as f:
+            with open(config_path) as f:
                 _extraction_config = json.load(f)
             logger.info("Loaded extraction config")
         except Exception as e:
-            logger.warning(f"Failed to load extraction config: {str(e)}, using defaults")
+            logger.warning(f"Failed to load extraction config: {e!s}, using defaults")
             _extraction_config = {"hotel_extraction": {"enabled": True, "config": {}}}
     return _extraction_config
 
@@ -69,7 +72,14 @@ def get_extraction_config() -> Dict[str, Any]:
 SECRETS_PREFIX = os.environ.get('SECRETS_PREFIX', 'citation-analysis/')
 DYNAMODB_TABLE_SEARCH_RESULTS = os.environ.get('DYNAMODB_TABLE_SEARCH_RESULTS')
 RAW_RESPONSES_BUCKET = os.environ.get('RAW_RESPONSES_BUCKET')
-PROVIDER_CONFIG_TABLE = os.environ.get('PROVIDER_CONFIG_TABLE', 'CitationAnalysis-ProviderConfig')
+# Provider config table — canonical name first, legacy fallback for in-flight
+# deploys. Default mirrors the CDK resource name so a bootstrap deploy works
+# even before env vars flow through. Audit #12.
+PROVIDER_CONFIG_TABLE = (
+    os.environ.get('DYNAMODB_TABLE_PROVIDER_CONFIG')
+    or os.environ.get('PROVIDER_CONFIG_TABLE')
+    or 'CitationAnalysis-ProviderConfig'
+)
 
 # Cache for secrets with TTL
 _secrets_cache = {}
@@ -89,31 +99,31 @@ def store_raw_response_to_s3(
     keyword: str,
     provider: str,
     timestamp: str,
-    raw_response: Dict[str, Any],
-    extracted_data: Dict[str, Any],
-    metadata: Dict[str, Any]
-) -> Optional[str]:
+    raw_response: dict[str, Any],
+    extracted_data: dict[str, Any],
+    metadata: dict[str, Any]
+) -> str | None:
     """
     Store raw API response to S3.
-    
+
     Structure: raw-responses/{date}/{keyword-slug}/{provider}/{timestamp}.json
-    
+
     Returns S3 URI if successful, None otherwise.
     """
     if not RAW_RESPONSES_BUCKET:
         logger.warning("RAW_RESPONSES_BUCKET not set, skipping S3 storage")
         return None
-    
+
     try:
         # Parse date from timestamp
         date_str = timestamp[:10]  # YYYY-MM-DD
-        
+
         # Create S3 key
         keyword_slug = slugify(keyword)
         # Make timestamp safe for S3 key (replace : with -)
         safe_timestamp = timestamp.replace(':', '-')
         s3_key = f"raw-responses/{date_str}/{keyword_slug}/{provider}/{safe_timestamp}.json"
-        
+
         # Build the full document
         document = {
             "keyword": keyword,
@@ -123,7 +133,7 @@ def store_raw_response_to_s3(
             "extracted": extracted_data,
             "metadata": metadata
         }
-        
+
         # Upload to S3
         s3_client.put_object(
             Bucket=RAW_RESPONSES_BUCKET,
@@ -131,20 +141,20 @@ def store_raw_response_to_s3(
             Body=json.dumps(document, default=str, indent=2),
             ContentType='application/json'
         )
-        
+
         s3_uri = f"s3://{RAW_RESPONSES_BUCKET}/{s3_key}"
         logger.info(f"Stored raw response to {s3_uri}")
         return s3_uri
-        
+
     except Exception as e:
-        logger.error(f"Failed to store raw response to S3: {str(e)}")
+        logger.error(f"Failed to store raw response to S3: {e!s}")
         return None
 
 
-def get_secret(secret_name: str) -> Optional[str]:
+def get_secret(secret_name: str) -> str | None:
     """Retrieve a secret from AWS Secrets Manager with TTL-based caching."""
     current_time = time.time()
-    
+
     # Check if cached and not expired
     if secret_name in _secrets_cache:
         cache_time = _secrets_cache_time.get(secret_name, 0)
@@ -155,7 +165,7 @@ def get_secret(secret_name: str) -> Optional[str]:
             logger.info("Secret cache expired, refreshing")
             del _secrets_cache[secret_name]
             del _secrets_cache_time[secret_name]
-    
+
     try:
         response = secrets_client.get_secret_value(SecretId=secret_name)
         if 'SecretString' in response:
@@ -167,23 +177,32 @@ def get_secret(secret_name: str) -> Optional[str]:
                 return api_key
     except Exception as e:
         logger.error("Error retrieving secret: %s", type(e).__name__)
-    
+
     return None
 
 
 def is_provider_enabled(provider_id: str) -> bool:
-    """Check if a provider is enabled in the config table."""
+    """Check if a provider is enabled in the config table.
+
+    Fails closed: if the config table is unavailable, return False so we do
+    not accidentally invoke a provider the user has disabled. A transient
+    DynamoDB failure should not override user intent.
+    """
     try:
         table = dynamodb.Table(PROVIDER_CONFIG_TABLE)
         response = table.get_item(Key={'provider_id': provider_id})
         item = response.get('Item')
         if item:
             return item.get('enabled', True)
-        # Default to enabled if no config exists
+        # No config row yet -> treat as enabled (first-run default)
         return True
     except Exception as e:
-        logger.warning(f"Error checking provider config for {provider_id}: {str(e)}, defaulting to enabled")
-        return True
+        logger.error(
+            "provider_config_read_failed provider=%s error=%s action=fail_closed",
+            provider_id,
+            type(e).__name__,
+        )
+        return False
 
 # Default models per provider (used when no override in ProviderConfig table)
 DEFAULT_PROVIDER_MODELS = {
@@ -196,11 +215,19 @@ DEFAULT_PROVIDER_MODELS = {
 # Cache for provider models (per Lambda invocation)
 _provider_model_cache = {}
 
+class ProviderConfigUnavailableError(RuntimeError):
+    """Raised when provider config cannot be read and no safe default exists."""
+
+
 def get_provider_model(provider_id: str) -> str:
     """Get configured model for a provider, with sensible defaults.
 
     Reads the 'model' field from the ProviderConfig table if set,
     otherwise falls back to DEFAULT_PROVIDER_MODELS.
+
+    Fails closed: raises ProviderConfigUnavailableError on DynamoDB errors
+    so the caller can skip the provider rather than silently using a
+    different model than the admin configured.
     """
     if provider_id in _provider_model_cache:
         return _provider_model_cache[provider_id]
@@ -217,36 +244,41 @@ def get_provider_model(provider_id: str) -> str:
         logger.info(f"Provider {provider_id} using model: {model}")
         return model
     except Exception as e:
-        logger.warning(f"Error reading model config for {provider_id}: {e}, using default: {default}")
-        _provider_model_cache[provider_id] = default
-        return default
+        logger.error(
+            "provider_model_read_failed provider=%s error=%s action=fail_closed",
+            provider_id,
+            type(e).__name__,
+        )
+        raise ProviderConfigUnavailableError(
+            f"Cannot read model config for provider {provider_id}"
+        ) from e
 
 
 
-def query_openai(keyword: str, api_key: str, model: str = "gpt-5-mini", query_template: Optional[str] = None) -> Dict[str, Any]:
+def query_openai(keyword: str, api_key: str, model: str = "gpt-5-mini", query_template: str | None = None) -> dict[str, Any]:
     """Query OpenAI API with native web search via Responses API."""
     start_time = time.time()
     try:
         client = OpenAIClient(api_key)
-        
+
         # Build query from template or use default
         if query_template:
             query = query_template.replace("{keyword}", keyword)
         else:
             query = f"Search for information about: {keyword}"
-        
+
         # Use Responses API with native web search
         raw_response = client.responses_with_web_search(
             query=query,
             model=model
         )
-        
+
         latency_ms = int((time.time() - start_time) * 1000)
-        
+
         # Extract response text and citations
         response_text = ""
         citations = []
-        
+
         # Parse output items
         output = raw_response.get('output', [])
         for item in output:
@@ -256,7 +288,7 @@ def query_openai(keyword: str, api_key: str, model: str = "gpt-5-mini", query_te
                 for content_item in content:
                     if content_item.get('type') == 'output_text':
                         response_text += content_item.get('text', '')
-                        
+
                         # Extract citations from annotations
                         annotations = content_item.get('annotations', [])
                         for annotation in annotations:
@@ -264,7 +296,7 @@ def query_openai(keyword: str, api_key: str, model: str = "gpt-5-mini", query_te
                                 url = annotation.get('url')
                                 if url:
                                     citations.append(clean_url(url))
-            
+
             elif item.get('type') == 'web_search_call':
                 # Extract sources from web search call
                 action = item.get('action', {})
@@ -273,16 +305,16 @@ def query_openai(keyword: str, api_key: str, model: str = "gpt-5-mini", query_te
                     url = source.get('url')
                     if url:
                         citations.append(clean_url(url))
-        
+
         # Fallback: extract from output_text if available
         if not response_text:
             response_text = raw_response.get('output_text', '')
-        
+
         # Remove duplicates from citations
         citations = list(dict.fromkeys(citations))  # Preserves order
-        
+
         logger.info(f"OpenAI found {len(citations)} citations for '{keyword}'")
-        
+
         return {
             "provider": Provider.OPENAI,
             "response": response_text,
@@ -296,7 +328,7 @@ def query_openai(keyword: str, api_key: str, model: str = "gpt-5-mini", query_te
             }
         }
     except Exception as e:
-        logger.error(f"OpenAI error: {str(e)}")
+        logger.error(f"OpenAI error: {e!s}")
         return {
             "provider": Provider.OPENAI,
             "response": "",
@@ -308,7 +340,7 @@ def query_openai(keyword: str, api_key: str, model: str = "gpt-5-mini", query_te
         }
 
 
-def query_perplexity(keyword: str, api_key: str, query_template: Optional[str] = None) -> Dict[str, Any]:
+def query_perplexity(keyword: str, api_key: str, query_template: str | None = None) -> dict[str, Any]:
     """Query Perplexity API."""
     start_time = time.time()
     try:
@@ -316,25 +348,25 @@ def query_perplexity(keyword: str, api_key: str, query_template: Optional[str] =
         query = query_template.replace("{keyword}", keyword) if query_template else keyword
         messages = [{"role": "user", "content": query}]
         raw_response = client.chat_completion(messages)
-        
+
         latency_ms = int((time.time() - start_time) * 1000)
-        
+
         response_text = raw_response['choices'][0]['message']['content']
-        
+
         # Extract citations from search_results field (new format)
         citations = []
         search_results = raw_response.get('search_results', [])
         if search_results:
             citations = [clean_url(result.get('url')) for result in search_results if result.get('url')]
-        
+
         # Fallback to old citations field if search_results is empty
         if not citations:
             citations = [clean_url(url) for url in raw_response.get('citations', [])]
-        
+
         # Last resort: extract from response text
         if not citations:
             citations = extract_citations_from_response(response_text)
-        
+
         return {
             "provider": Provider.PERPLEXITY,
             "response": response_text,
@@ -348,7 +380,7 @@ def query_perplexity(keyword: str, api_key: str, query_template: Optional[str] =
             }
         }
     except Exception as e:
-        logger.error(f"Perplexity error: {str(e)}")
+        logger.error(f"Perplexity error: {e!s}")
         return {
             "provider": Provider.PERPLEXITY,
             "response": "",
@@ -373,31 +405,31 @@ def resolve_gemini_redirect(redirect_url: str, timeout: int = 5) -> str:
         logger.info(f"Resolved Gemini redirect: {redirect_url[:50]}... -> {real_url}")
         return real_url
     except Exception as e:
-        logger.warning(f"Failed to resolve Gemini redirect {redirect_url[:50]}...: {str(e)}")
+        logger.warning(f"Failed to resolve Gemini redirect {redirect_url[:50]}...: {e!s}")
         # Return the redirect URL as fallback
         return redirect_url
 
 
-def query_gemini(keyword: str, api_key: str, query_template: Optional[str] = None) -> Dict[str, Any]:
+def query_gemini(keyword: str, api_key: str, query_template: str | None = None) -> dict[str, Any]:
     """Query Gemini API with Google Search."""
     start_time = time.time()
     try:
         client = GeminiClient(api_key)
         query = query_template.replace("{keyword}", keyword) if query_template else keyword
         raw_response = client.generate_content(query)
-        
+
         latency_ms = int((time.time() - start_time) * 1000)
-        
+
         # Extract text from Gemini response
         response_text = ""
         citations = []
-        
+
         if 'candidates' in raw_response and len(raw_response['candidates']) > 0:
             candidate = raw_response['candidates'][0]
             if 'content' in candidate and 'parts' in candidate['content']:
                 parts = candidate['content']['parts']
                 response_text = ' '.join([part.get('text', '') for part in parts])
-            
+
             # Extract citations from grounding metadata and resolve redirects
             if 'groundingMetadata' in candidate:
                 grounding = candidate['groundingMetadata']
@@ -414,13 +446,13 @@ def query_gemini(keyword: str, api_key: str, query_template: Optional[str] = Non
                 # Also check webSearchQueries if available
                 if 'webSearchQueries' in grounding:
                     logger.info(f"Gemini search queries: {grounding['webSearchQueries']}")
-        
+
         # Also extract any URLs from the text itself
         text_citations = extract_citations_from_response(response_text)
         for citation in text_citations:
             if citation not in citations:
                 citations.append(citation)
-        
+
         return {
             "provider": Provider.GEMINI,
             "response": response_text,
@@ -434,7 +466,7 @@ def query_gemini(keyword: str, api_key: str, query_template: Optional[str] = Non
             }
         }
     except Exception as e:
-        logger.error(f"Gemini error: {str(e)}")
+        logger.error(f"Gemini error: {e!s}")
         return {
             "provider": Provider.GEMINI,
             "response": "",
@@ -446,28 +478,28 @@ def query_gemini(keyword: str, api_key: str, query_template: Optional[str] = Non
         }
 
 
-def query_claude(keyword: str, api_key: str, query_template: Optional[str] = None) -> Dict[str, Any]:
+def query_claude(keyword: str, api_key: str, query_template: str | None = None) -> dict[str, Any]:
     """Query Claude API with web search."""
     start_time = time.time()
     try:
         client = ClaudeClient(api_key)
         query = query_template.replace("{keyword}", keyword) if query_template else keyword
         raw_response = client.generate_content(query)
-        
+
         latency_ms = int((time.time() - start_time) * 1000)
-        
+
         # Log the full response structure for debugging
         logger.info(f"Claude raw response structure: {json.dumps(raw_response, default=str)[:1000]}")
-        
+
         # Extract text and citations from Claude response
         response_text = ""
         citations = []
-        
+
         if 'content' in raw_response and len(raw_response['content']) > 0:
             for content_block in raw_response['content']:
                 block_type = content_block.get('type')
                 logger.debug(f"Claude content block type: {block_type}")
-                
+
                 if block_type == 'text':
                     response_text += content_block.get('text', '')
                 # Extract citations from tool_use blocks (Claude's web search)
@@ -495,15 +527,15 @@ def query_claude(keyword: str, api_key: str, query_template: Optional[str] = Non
                 # Log any truly unknown block types at info level
                 else:
                     logger.info(f"Claude unhandled block type '{block_type}': {json.dumps(content_block, default=str)[:300]}")
-        
+
         # Extract any URLs from the text itself (primary method for Claude)
         text_citations = extract_citations_from_response(response_text)
         for citation in text_citations:
             if citation not in citations:
                 citations.append(citation)
-        
+
         logger.info(f"Claude extracted {len(citations)} citations from text for '{keyword}'")
-        
+
         return {
             "provider": Provider.CLAUDE,
             "response": response_text,
@@ -517,7 +549,7 @@ def query_claude(keyword: str, api_key: str, query_template: Optional[str] = Non
             }
         }
     except Exception as e:
-        logger.error(f"Claude error: {str(e)}")
+        logger.error(f"Claude error: {e!s}")
         return {
             "provider": Provider.CLAUDE,
             "response": "",
@@ -529,13 +561,13 @@ def query_claude(keyword: str, api_key: str, query_template: Optional[str] = Non
         }
 
 
-def execute_all_providers(keyword: str, provider_types: Optional[List[str]] = None, providers: Optional[List[str]] = None, query_template: Optional[str] = None) -> List[Dict[str, Any]]:
+def execute_all_providers(keyword: str, provider_types: list[str] | None = None, providers: list[str] | None = None, query_template: str | None = None) -> list[dict[str, Any]]:
     """
     Execute queries across AI providers.
-    
+
     Args:
         keyword: Search keyword
-        provider_types: Optional list of provider types to run ("llm", "search", or both). 
+        provider_types: Optional list of provider types to run ("llm", "search", or both).
                        If None, runs all types.
         providers: Optional list of specific provider IDs to run.
                   If None, runs all enabled providers of the specified types.
@@ -543,11 +575,11 @@ def execute_all_providers(keyword: str, provider_types: Optional[List[str]] = No
                        If None, each provider uses its default query format.
     """
     results = []
-    
+
     # Determine which types to run
     run_llm = provider_types is None or "llm" in provider_types
     run_search = provider_types is None or "search" in provider_types
-    
+
     # Get API keys for LLM providers (only if needed)
     if run_llm:
         openai_key = get_secret(f"{SECRETS_PREFIX}openai-key")
@@ -556,7 +588,7 @@ def execute_all_providers(keyword: str, provider_types: Optional[List[str]] = No
         claude_key = get_secret(f"{SECRETS_PREFIX}claude-key")
     else:
         openai_key = perplexity_key = gemini_key = claude_key = None
-    
+
     # Get API keys for Search providers (only if needed)
     if run_search:
         brave_key = get_secret(f"{SECRETS_PREFIX}brave-key")
@@ -566,24 +598,27 @@ def execute_all_providers(keyword: str, provider_types: Optional[List[str]] = No
         firecrawl_key = get_secret(f"{SECRETS_PREFIX}firecrawl-key")
     else:
         brave_key = tavily_key = exa_key = serpapi_key = firecrawl_key = None
-    
+
     # Helper to check if a specific provider should run
     def should_run_provider(provider_id: str) -> bool:
         if providers is not None:
             return provider_id in providers
         return True
-    
+
     # Query LLM providers (only if enabled and has API key)
     if run_llm:
         if openai_key and is_provider_enabled(Provider.OPENAI) and should_run_provider(Provider.OPENAI):
             logger.info("Querying OpenAI...")
-            openai_model = get_provider_model(Provider.OPENAI)
-            results.append(query_openai(keyword, openai_key, model=openai_model, query_template=query_template))
+            try:
+                openai_model = get_provider_model(Provider.OPENAI)
+                results.append(query_openai(keyword, openai_key, model=openai_model, query_template=query_template))
+            except ProviderConfigUnavailableError:
+                logger.error("OpenAI provider config unavailable, skipping this run")
         elif openai_key and should_run_provider(Provider.OPENAI):
             logger.info("OpenAI is disabled, skipping")
         elif should_run_provider(Provider.OPENAI):
             logger.info("OpenAI API key not configured, skipping")
-        
+
         if perplexity_key and is_provider_enabled(Provider.PERPLEXITY) and should_run_provider(Provider.PERPLEXITY):
             logger.info("Querying Perplexity...")
             results.append(query_perplexity(keyword, perplexity_key, query_template=query_template))
@@ -591,7 +626,7 @@ def execute_all_providers(keyword: str, provider_types: Optional[List[str]] = No
             logger.info("Perplexity is disabled, skipping")
         elif should_run_provider(Provider.PERPLEXITY):
             logger.info("Perplexity API key not configured, skipping")
-        
+
         if gemini_key and is_provider_enabled(Provider.GEMINI) and should_run_provider(Provider.GEMINI):
             logger.info("Querying Gemini...")
             results.append(query_gemini(keyword, gemini_key, query_template=query_template))
@@ -599,7 +634,7 @@ def execute_all_providers(keyword: str, provider_types: Optional[List[str]] = No
             logger.info("Gemini is disabled, skipping")
         elif should_run_provider(Provider.GEMINI):
             logger.info("Gemini API key not configured, skipping")
-        
+
         if claude_key and is_provider_enabled(Provider.CLAUDE) and should_run_provider(Provider.CLAUDE):
             logger.info("Querying Claude...")
             enhanced_keyword = f"{keyword}\n\nPlease include source URLs for all information provided."
@@ -608,7 +643,7 @@ def execute_all_providers(keyword: str, provider_types: Optional[List[str]] = No
             logger.info("Claude is disabled, skipping")
         elif should_run_provider(Provider.CLAUDE):
             logger.info("Claude API key not configured, skipping")
-    
+
     # Query Search providers
     if run_search:
         if brave_key and is_provider_enabled(Provider.BRAVE) and should_run_provider(Provider.BRAVE):
@@ -619,7 +654,7 @@ def execute_all_providers(keyword: str, provider_types: Optional[List[str]] = No
             logger.info("Brave Search is disabled, skipping")
         elif should_run_provider(Provider.BRAVE):
             logger.info("Brave Search API key not configured, skipping")
-        
+
         if tavily_key and is_provider_enabled(Provider.TAVILY) and should_run_provider(Provider.TAVILY):
             logger.info("Querying Tavily...")
             client = TavilySearchClient(tavily_key)
@@ -628,7 +663,7 @@ def execute_all_providers(keyword: str, provider_types: Optional[List[str]] = No
             logger.info("Tavily is disabled, skipping")
         elif should_run_provider(Provider.TAVILY):
             logger.info("Tavily API key not configured, skipping")
-        
+
         if exa_key and is_provider_enabled(Provider.EXA) and should_run_provider(Provider.EXA):
             logger.info("Querying Exa...")
             client = ExaSearchClient(exa_key)
@@ -637,7 +672,7 @@ def execute_all_providers(keyword: str, provider_types: Optional[List[str]] = No
             logger.info("Exa is disabled, skipping")
         elif should_run_provider(Provider.EXA):
             logger.info("Exa API key not configured, skipping")
-        
+
         if serpapi_key and is_provider_enabled(Provider.SERPAPI) and should_run_provider(Provider.SERPAPI):
             logger.info("Querying SerpAPI...")
             client = SerpAPIClient(serpapi_key)
@@ -646,7 +681,7 @@ def execute_all_providers(keyword: str, provider_types: Optional[List[str]] = No
             logger.info("SerpAPI is disabled, skipping")
         elif should_run_provider(Provider.SERPAPI):
             logger.info("SerpAPI API key not configured, skipping")
-        
+
         if firecrawl_key and is_provider_enabled(Provider.FIRECRAWL) and should_run_provider(Provider.FIRECRAWL):
             logger.info("Querying Firecrawl...")
             client = FirecrawlSearchClient(firecrawl_key)
@@ -655,19 +690,19 @@ def execute_all_providers(keyword: str, provider_types: Optional[List[str]] = No
             logger.info("Firecrawl is disabled, skipping")
         elif should_run_provider(Provider.FIRECRAWL):
             logger.info("Firecrawl API key not configured, skipping")
-    
+
     return results
 
 
-def store_search_results(keyword: str, timestamp: str, results: List[Dict[str, Any]]) -> bool:
+def store_search_results(keyword: str, timestamp: str, results: list[dict[str, Any]]) -> bool:
     """Store search results in DynamoDB and raw responses to S3."""
     if not DYNAMODB_TABLE_SEARCH_RESULTS:
         logger.error("DYNAMODB_TABLE_SEARCH_RESULTS not set")
         return False
-    
+
     try:
         table = dynamodb.Table(DYNAMODB_TABLE_SEARCH_RESULTS)
-        
+
         # Load extraction config
         extraction_config = get_extraction_config()
         brand_extraction_enabled = extraction_config.get("brand_extraction", {}).get("enabled", True)
@@ -677,7 +712,7 @@ def store_search_results(keyword: str, timestamp: str, results: List[Dict[str, A
             from shared.utils import get_brand_config as _get_brand_config
             brand_config = _get_brand_config()
             logger.info(f"Loaded brand config for extraction: industry={brand_config.get('industry') if brand_config else 'default'}")
-        
+
         for result in results:
             provider = result.get("provider")
             provider_type = result.get("provider_type", "llm")  # Default to llm for backward compatibility
@@ -685,7 +720,7 @@ def store_search_results(keyword: str, timestamp: str, results: List[Dict[str, A
             query_prompt_name = result.get("query_prompt_name", "Default")
             timestamp_provider = f"{timestamp}#{provider}#{query_prompt_id}"
             response_text = result.get("response", "")
-            
+
             # Extract brand mentions from response if enabled (only for LLM providers with text responses)
             brand_data = {"brands": [], "brand_count": 0}
             if brand_extraction_enabled and response_text and provider_type == "llm":
@@ -694,13 +729,13 @@ def store_search_results(keyword: str, timestamp: str, results: List[Dict[str, A
                     brand_data = extract_brands_from_response(response_text, config=brand_config)
                     logger.info(f"Brand extraction for {provider}: {brand_data.get('brand_count', 0)} brands found")
                 except Exception as e:
-                    logger.error(f"Brand extraction failed for {provider}: {str(e)}", exc_info=True)
-            
+                    logger.error(f"Brand extraction failed for {provider}: {e!s}", exc_info=True)
+
             # Store raw response to S3
             raw_response = result.get("raw_response")
             metadata = result.get("metadata", {})
             s3_uri = None
-            
+
             if raw_response:
                 extracted_data = {
                     "response_text": response_text,
@@ -716,7 +751,7 @@ def store_search_results(keyword: str, timestamp: str, results: List[Dict[str, A
                     extracted_data=extracted_data,
                     metadata=metadata
                 )
-            
+
             item = {
                 "keyword": keyword,
                 "timestamp_provider": timestamp_provider,
@@ -731,32 +766,32 @@ def store_search_results(keyword: str, timestamp: str, results: List[Dict[str, A
                 "brands": brand_data.get("brands", []),
                 "brand_count": brand_data.get("brand_count", 0),
             }
-            
+
             # Add search results for search providers (convert floats to Decimal for DynamoDB)
             if provider_type == "search" and result.get("search_results"):
                 item["search_results"] = convert_floats_to_decimal(result.get("search_results", []))
-            
+
             # Add S3 URI if raw response was stored
             if s3_uri:
                 item["raw_response_s3_uri"] = s3_uri
-            
+
             # Add metadata (convert floats to Decimal for DynamoDB)
             if metadata:
                 item["metadata"] = convert_floats_to_decimal(metadata)
-            
+
             if "error" in result:
                 item["error"] = result["error"]
-            
+
             table.put_item(Item=item)
             logger.info(f"Stored result for {provider} ({provider_type}) with {item['brand_count']} brand mentions, S3: {s3_uri or 'N/A'}")
-        
+
         return True
     except Exception as e:
-        logger.error(f"Error storing results: {str(e)}")
+        logger.error(f"Error storing results: {e!s}")
         return False
 
 
-def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """
     Lambda handler for searching across AI providers.
 
@@ -780,14 +815,25 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
     try:
         # Extract keyword and timestamp
-        keyword = event.get('keyword')
-        timestamp = event.get('timestamp', datetime.utcnow().isoformat() + 'Z')
+        keyword_raw = event.get('keyword')
+        timestamp = event.get('timestamp', get_timestamp())
         provider_types = event.get('provider_types')  # Optional: ["llm"], ["search"], or ["llm", "search"]
         providers = event.get('providers')  # Optional: specific provider IDs
         query_prompts = event.get('query_prompts', [])
 
-        if not keyword:
+        if not keyword_raw:
             error = ValueError("Missing required field: keyword")
+            log_error(error, "search handler", event)
+            raise error
+
+        # Sanitize the keyword before it lands in any provider query string.
+        # Keywords are dashboard-editable (see api/manage-keywords) so treated
+        # as untrusted input. The brand extractor downstream wraps the full
+        # provider response in <response_text> tags — this is defense in depth
+        # so a crafted keyword can't poison the query itself.
+        keyword = sanitize_user_input(keyword_raw, max_length=500)
+        if not keyword:
+            error = ValueError("Keyword is empty after sanitization")
             log_error(error, "search handler", event)
             raise error
 
@@ -860,4 +906,3 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     except Exception as e:
         log_error(e, f"search handler for keyword {event.get('keyword', 'unknown')}", event)
         raise
-# Force rebuild

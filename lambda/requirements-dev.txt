@@ -1,0 +1,27 @@
+# Dev-only dependencies for running the Lambda test suite locally and in CI.
+#
+# Runtime dependencies (boto3, requests, bedrock-agentcore, playwright, etc.)
+# are installed into the Lambda layer via lambda/layer/build-layer.sh and
+# lambda/crawler-layer/build-layer.sh — they are NOT listed here.
+#
+# Install for local dev:
+#   pip install -r lambda/requirements-dev.txt
+# or via pipx (per scripts/lint-python.sh convention):
+#   pipx inject pytest boto3 hypothesis
+#
+# This file is the source of truth for the test toolchain. Keep it minimal —
+# anything a real Lambda handler needs goes in layer/requirements.txt.
+
+# Test runner
+pytest>=8.0,<9.0
+
+# Property-based tests (used by test_url_validator.py, test_api_response.py)
+hypothesis>=6.100,<7.0
+
+# Test doubles for AWS SDK calls — tests mock boto3 at the import boundary
+# so boto3 itself must be importable.
+boto3>=1.34,<2.0
+
+# Linters — kept in sync with scripts/lint-python.sh
+ruff==0.15.11
+vulture==2.16

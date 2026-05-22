@@ -7,18 +7,23 @@ Includes brand expansion using LLM to suggest related sub-brands.
 """
 
 import json
+import logging
 import os
 import sys
-import logging
+from typing import Any
+
 import boto3
-from datetime import datetime
-from typing import Dict, Any
 
 # Add shared module to path
 sys.path.insert(0, '/opt/python')
 
-from shared.decorators import api_handler, parse_json_body, validate, cors_preflight, route_handler
 from shared.api_response import success_response, validation_error
+from shared.decorators import api_handler, cors_preflight, parse_json_body, route_handler, validate
+from shared.industry_presets import INDUSTRY_PRESETS as _BASE_PRESETS
+from shared.industry_presets import get_preset as get_shared_preset
+from shared.llm_json import parse_llm_json
+from shared.prompt_safety import untrusted_input_system_instruction, wrap_user_input
+from shared.utils import get_timestamp
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -27,48 +32,17 @@ logger.setLevel(logging.INFO)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'search'))
 
 dynamodb = boto3.resource('dynamodb')
-bedrock = boto3.client('bedrock-runtime')
+
+# Import centralized Bedrock invocation (ModelRole.ANALYSIS -> Sonnet by default)
+from shared.models import ModelRole, invoke_bedrock  # noqa: E402
 
 # Fail-fast: Required environment variables
 DYNAMODB_TABLE_BRAND_CONFIG = os.environ['DYNAMODB_TABLE_BRAND_CONFIG']
 
-# Model for brand expansion
-EXPANSION_MODEL_ID = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
-
-
-def invoke_converse(prompt: str, model_id: str = EXPANSION_MODEL_ID, max_tokens: int = 2000, temperature: float = 0) -> str:
-    """
-    Invoke Bedrock using the Converse API.
-    
-    Args:
-        prompt: The prompt to send
-        model_id: Model ID to use
-        max_tokens: Maximum tokens in response
-        temperature: Temperature for generation
-        
-    Returns:
-        Response text from the model
-    """
-    response = bedrock.converse(
-        modelId=model_id,
-        messages=[
-            {'role': 'user', 'content': [{'text': prompt}]}
-        ],
-        inferenceConfig={
-            'maxTokens': max_tokens,
-            'temperature': temperature
-        }
-    )
-    
-    output = response.get('output', {})
-    message = output.get('message', {})
-    content_blocks = message.get('content', [])
-    return content_blocks[0].get('text', '') if content_blocks else ''
-
 def generate_default_prompt(industry_name: str, extraction_focus: str, entity_types: list) -> str:
     """Generate a default extraction prompt for an industry."""
     entity_desc = '\n'.join([f"- {et}" for et in entity_types]) if entity_types else "- Brand names and company names"
-    
+
     return f"""Extract all brand and company mentions from the following text.
 
 INDUSTRY CONTEXT: {industry_name}
@@ -112,117 +86,37 @@ TEXT TO ANALYZE:
 JSON OUTPUT:"""
 
 
-# Industry presets with default prompts
-INDUSTRY_PRESETS = {
-    "hotels": {
-        "name": "Hotels & Hospitality",
-        "description": "Track hotel brands, chains, and individual properties",
-        "entity_types": ["hotel chains", "hotel brands", "individual properties", "resorts", "boutique hotels"],
-        "example_brands": ["Brand A", "Brand B", "Brand C", "Brand D", "Brand E"],
-        "extraction_focus": "hotel and accommodation recommendations",
+# Industry preset structural data is owned by shared.industry_presets. The
+# dashboard API returns the same base fields plus a derived `default_prompt`
+# computed at request time via `_preset_with_prompt`, avoiding drift between
+# this file's copy and the extraction Lambda's.
+
+
+def _preset_with_prompt(preset: dict) -> dict:
+    """Decorate a shared preset with a `default_prompt` string.
+
+    Dashboard clients consume both the structural fields and a ready-to-use
+    prompt. Computing the prompt here keeps the shared module free of
+    API-specific concerns and lets us change the prompt template without
+    touching the extraction Lambda.
+    """
+    return {
+        **preset,
         "default_prompt": generate_default_prompt(
-            "Hotels & Hospitality",
-            "hotel and accommodation recommendations",
-            ["hotel chains", "hotel brands", "individual properties", "resorts", "boutique hotels"]
-        )
-    },
-    "restaurants": {
-        "name": "Restaurants & Food Service",
-        "description": "Track restaurant chains, fast food, and dining brands",
-        "entity_types": ["restaurant chains", "fast food brands", "casual dining", "fine dining", "coffee shops"],
-        "example_brands": ["McDonald's", "Starbucks", "Chipotle", "Olive Garden", "Domino's"],
-        "extraction_focus": "restaurant and dining recommendations",
-        "default_prompt": generate_default_prompt(
-            "Restaurants & Food Service",
-            "restaurant and dining recommendations",
-            ["restaurant chains", "fast food brands", "casual dining", "fine dining", "coffee shops"]
-        )
-    },
-    "airlines": {
-        "name": "Airlines & Aviation",
-        "description": "Track airline brands and aviation companies",
-        "entity_types": ["airlines", "aviation companies", "low-cost carriers", "premium airlines"],
-        "example_brands": ["Delta", "United", "American Airlines", "Southwest", "JetBlue", "Ryanair"],
-        "extraction_focus": "airline and flight recommendations",
-        "default_prompt": generate_default_prompt(
-            "Airlines & Aviation",
-            "airline and flight recommendations",
-            ["airlines", "aviation companies", "low-cost carriers", "premium airlines"]
-        )
-    },
-    "retail": {
-        "name": "Retail & Consumer Brands",
-        "description": "Track retail stores and consumer product brands",
-        "entity_types": ["retail stores", "e-commerce brands", "consumer products", "fashion brands"],
-        "example_brands": ["Amazon", "Walmart", "Target", "Nike", "Adidas", "Apple"],
-        "extraction_focus": "product and retail recommendations",
-        "default_prompt": generate_default_prompt(
-            "Retail & Consumer Brands",
-            "product and retail recommendations",
-            ["retail stores", "e-commerce brands", "consumer products", "fashion brands"]
-        )
-    },
-    "fashion": {
-        "name": "Fashion & Apparel",
-        "description": "Track fashion brands, clothing, and footwear",
-        "entity_types": ["fashion brands", "clothing brands", "footwear brands", "luxury brands", "sportswear"],
-        "example_brands": ["Nike", "Adidas", "Zara", "H&M", "Gucci", "Louis Vuitton", "Puma"],
-        "extraction_focus": "fashion and apparel recommendations",
-        "default_prompt": generate_default_prompt(
-            "Fashion & Apparel",
-            "fashion and apparel recommendations",
-            ["fashion brands", "clothing brands", "footwear brands", "luxury brands", "sportswear"]
-        )
-    },
-    "automotive": {
-        "name": "Automotive",
-        "description": "Track car brands and automotive companies",
-        "entity_types": ["car manufacturers", "automotive brands", "EV companies", "luxury car brands"],
-        "example_brands": ["Toyota", "Ford", "Tesla", "BMW", "Mercedes-Benz", "Honda"],
-        "extraction_focus": "vehicle and automotive recommendations",
-        "default_prompt": generate_default_prompt(
-            "Automotive",
-            "vehicle and automotive recommendations",
-            ["car manufacturers", "automotive brands", "EV companies", "luxury car brands"]
-        )
-    },
-    "technology": {
-        "name": "Technology & Software",
-        "description": "Track tech companies and software brands",
-        "entity_types": ["tech companies", "software brands", "SaaS products", "hardware brands"],
-        "example_brands": ["Apple", "Google", "Microsoft", "Amazon", "Meta", "Salesforce"],
-        "extraction_focus": "technology and software recommendations",
-        "default_prompt": generate_default_prompt(
-            "Technology & Software",
-            "technology and software recommendations",
-            ["tech companies", "software brands", "SaaS products", "hardware brands"]
-        )
-    },
-    "finance": {
-        "name": "Finance & Banking",
-        "description": "Track banks, financial services, and fintech",
-        "entity_types": ["banks", "credit card companies", "fintech", "insurance companies", "investment firms"],
-        "example_brands": ["Chase", "Bank of America", "PayPal", "Visa", "Mastercard", "Goldman Sachs"],
-        "extraction_focus": "financial service recommendations",
-        "default_prompt": generate_default_prompt(
-            "Finance & Banking",
-            "financial service recommendations",
-            ["banks", "credit card companies", "fintech", "insurance companies", "investment firms"]
-        )
-    },
-    "custom": {
-        "name": "Custom Industry",
-        "description": "Define your own industry and brand types",
-        "entity_types": [],
-        "example_brands": [],
-        "extraction_focus": "brand and company recommendations",
-        "default_prompt": generate_default_prompt(
-            "Custom Industry",
-            "brand and company recommendations",
-            ["brand names", "company names"]
-        )
+            preset["name"],
+            preset["extraction_focus"],
+            preset.get("entity_types", []),
+        ),
     }
-}
+
+
+def get_preset_with_prompt(industry_id: str) -> dict:
+    """Look up an industry preset and decorate it with its default prompt.
+
+    Uses `shared.industry_presets.get_preset` for the base lookup (which
+    falls back to ``custom`` on unknown ids).
+    """
+    return _preset_with_prompt(get_shared_preset(industry_id))
 
 
 def normalize_brand(name: str) -> str:
@@ -237,7 +131,7 @@ def find_duplicates(brands: list) -> list:
     """Find potential duplicates in a brand list based on normalized comparison."""
     duplicates = []
     seen = {}
-    
+
     for brand in brands:
         normalized = normalize_brand(brand)
         if normalized in seen:
@@ -248,15 +142,15 @@ def find_duplicates(brands: list) -> list:
             })
         else:
             seen[normalized] = brand
-    
+
     return duplicates
 
 
-def expand_brands(existing_brands: list, industry: str = "hotels", brand_type: str = "first_party") -> Dict[str, Any]:
+def expand_brands(existing_brands: list, industry: str = "hotels", brand_type: str = "first_party") -> dict[str, Any]:
     """
     Use LLM to expand ALL existing brands into related sub-brands, variations, and owned properties.
     Returns deduplicated suggestions and flags existing duplicates.
-    
+
     Args:
         existing_brands: List of brands already added
         industry: Industry context for better suggestions
@@ -269,21 +163,25 @@ def expand_brands(existing_brands: list, industry: str = "hotels", brand_type: s
             "notes": "No brands provided to expand",
             "error": "Please add at least one brand first"
         }
-    
-    industry_preset = INDUSTRY_PRESETS.get(industry, INDUSTRY_PRESETS.get("custom", {}))
+
+    industry_preset = get_shared_preset(industry)
     industry_name = industry_preset.get("name", "General")
     entity_types = industry_preset.get("entity_types", ["brands", "companies"])
-    
+
     entity_types_str = ", ".join(entity_types) if entity_types else "brands and companies"
-    brands_list = ", ".join(existing_brands)
-    
+    # Wrap each user-supplied brand in `<brand>` tags so malicious names
+    # cannot escape into the surrounding prompt instructions.
+    brands_list = ", ".join(wrap_user_input(b, "brand") for b in existing_brands if b)
+
     # Check for existing duplicates first
     existing_duplicates = find_duplicates(existing_brands)
-    
+
     # Normalize existing brands for filtering
     existing_normalized = {normalize_brand(b) for b in existing_brands}
-    
-    prompt = f"""You are a brand expert for the {industry_name} industry.
+
+    prompt = f"""{untrusted_input_system_instruction()}
+
+You are a brand expert for the {industry_name} industry.
 
 INDUSTRY CONTEXT:
 - Entity types: {entity_types_str}
@@ -320,38 +218,21 @@ If ALL sub-brands are already being tracked, return an empty suggestions array a
 JSON OUTPUT:"""
 
     try:
-        response_text = invoke_converse(prompt, EXPANSION_MODEL_ID, max_tokens=2000, temperature=0)
-        
+        response_text = invoke_bedrock(prompt, ModelRole.ANALYSIS, max_tokens=2000, temperature=0)
+
         if not response_text:
             return {"suggestions": [], "duplicates_found": existing_duplicates, "error": "Empty response"}
-        
-        # Parse JSON from response
-        cleaned_text = response_text.strip()
-        if '```' in cleaned_text:
-            start_fence = cleaned_text.find('```')
-            if start_fence != -1:
-                newline_after_fence = cleaned_text.find('\n', start_fence)
-                if newline_after_fence != -1:
-                    cleaned_text = cleaned_text[newline_after_fence + 1:]
-                end_fence = cleaned_text.rfind('```')
-                if end_fence != -1:
-                    cleaned_text = cleaned_text[:end_fence].strip()
-        
-        start_idx = cleaned_text.find('{')
-        end_idx = cleaned_text.rfind('}') + 1
-        
-        if start_idx == -1 or end_idx == 0:
+
+        result = parse_llm_json(response_text, expect="object")
+        if result is None:
             return {"suggestions": [], "duplicates_found": existing_duplicates, "error": "Invalid response format"}
-        
-        json_str = cleaned_text[start_idx:end_idx]
-        result = json.loads(json_str)
-        
+
         suggestions = result.get("suggestions", [])
-        
+
         # Filter out any suggestions that match existing brands (normalized)
         existing_normalized = {normalize_brand(b) for b in existing_brands}
         filtered_suggestions = [s for s in suggestions if normalize_brand(s) not in existing_normalized]
-        
+
         # Also deduplicate within suggestions
         seen = set()
         unique_suggestions = []
@@ -360,7 +241,7 @@ JSON OUTPUT:"""
             if norm not in seen:
                 seen.add(norm)
                 unique_suggestions.append(s)
-        
+
         return {
             "existing_brands": existing_brands,
             "parent_companies": result.get("parent_companies", []),
@@ -369,9 +250,9 @@ JSON OUTPUT:"""
             "notes": result.get("notes", ""),
             "industry": industry
         }
-        
+
     except Exception as e:
-        logger.error(f"Error expanding brands: {str(e)}")
+        logger.error(f"Error expanding brands: {e!s}")
         return {
             "suggestions": [],
             "duplicates_found": existing_duplicates,
@@ -379,13 +260,13 @@ JSON OUTPUT:"""
         }
 
 
-def expand_brand(brand_name: str, industry: str = "hotels", existing_brands: list = None) -> Dict[str, Any]:
+def expand_brand(brand_name: str, industry: str = "hotels", existing_brands: list | None = None) -> dict[str, Any]:
     """
     Use LLM to expand a brand name into related sub-brands, variations, and owned properties.
-    
+
     This helps users configure comprehensive brand tracking by suggesting all the
     brand variations that should be tracked together.
-    
+
     Args:
         brand_name: The brand to expand
         industry: Industry context
@@ -393,20 +274,26 @@ def expand_brand(brand_name: str, industry: str = "hotels", existing_brands: lis
     """
     if existing_brands is None:
         existing_brands = []
-    
-    industry_preset = INDUSTRY_PRESETS.get(industry, INDUSTRY_PRESETS.get("custom", {}))
+
+    industry_preset = get_shared_preset(industry)
     industry_name = industry_preset.get("name", "General")
     entity_types = industry_preset.get("entity_types", ["brands", "companies"])
     example_brands = industry_preset.get("example_brands", [])
-    
+
     # Build industry-specific examples
     entity_types_str = ", ".join(entity_types) if entity_types else "brands and companies"
     examples_str = ", ".join(example_brands[:5]) if example_brands else "major brands in this industry"
-    
-    # Build exclusion list for the prompt
-    exclude_str = ", ".join(existing_brands) if existing_brands else "none"
-    
-    prompt = f"""You are a brand expert for the {industry_name} industry.
+
+    # Wrap user-supplied brand names so a malicious entry cannot escape the prompt.
+    exclude_str = (
+        ", ".join(wrap_user_input(b, "brand") for b in existing_brands if b)
+        if existing_brands else "none"
+    )
+    brand_name_wrapped = wrap_user_input(brand_name, "brand")
+
+    prompt = f"""{untrusted_input_system_instruction()}
+
+You are a brand expert for the {industry_name} industry.
 
 INDUSTRY CONTEXT:
 - Entity types: {entity_types_str}
@@ -414,7 +301,7 @@ INDUSTRY CONTEXT:
 
 ALREADY TRACKED (do NOT suggest these): {exclude_str}
 
-Given the brand name "{brand_name}", list ALL related brand names that should be tracked together.
+Given the brand name {brand_name_wrapped}, list ALL related brand names that should be tracked together.
 
 Include:
 1. Sub-brands and brand tiers owned by this company
@@ -446,37 +333,20 @@ If all sub-brands are already tracked, return an empty suggestions array with a 
 JSON OUTPUT:"""
 
     try:
-        response_text = invoke_converse(prompt, EXPANSION_MODEL_ID, max_tokens=1500, temperature=0)
-        
+        response_text = invoke_bedrock(prompt, ModelRole.ANALYSIS, max_tokens=1500, temperature=0)
+
         if not response_text:
             return {"main_brand": brand_name, "suggestions": [brand_name], "error": "Empty response"}
-        
-        # Parse JSON from response
-        cleaned_text = response_text.strip()
-        if '```' in cleaned_text:
-            start_fence = cleaned_text.find('```')
-            if start_fence != -1:
-                newline_after_fence = cleaned_text.find('\n', start_fence)
-                if newline_after_fence != -1:
-                    cleaned_text = cleaned_text[newline_after_fence + 1:]
-                end_fence = cleaned_text.rfind('```')
-                if end_fence != -1:
-                    cleaned_text = cleaned_text[:end_fence].strip()
-        
-        start_idx = cleaned_text.find('{')
-        end_idx = cleaned_text.rfind('}') + 1
-        
-        if start_idx == -1 or end_idx == 0:
+
+        result = parse_llm_json(response_text, expect="object")
+        if result is None:
             return {"main_brand": brand_name, "suggestions": [brand_name], "error": "Invalid response format"}
-        
-        json_str = cleaned_text[start_idx:end_idx]
-        result = json.loads(json_str)
-        
+
         # Ensure main_brand is included in suggestions for completeness
         suggestions = result.get("suggestions", [])
         if brand_name not in suggestions:
             suggestions.insert(0, brand_name)
-        
+
         return {
             "main_brand": brand_name,
             "parent_company": result.get("parent_company"),
@@ -484,9 +354,9 @@ JSON OUTPUT:"""
             "notes": result.get("notes", ""),
             "industry": industry
         }
-        
+
     except Exception as e:
-        logger.error(f"Error expanding brand name '{brand_name}': {str(e)}")
+        logger.error(f"Error expanding brand name '{brand_name}': {e!s}")
         return {
             "main_brand": brand_name,
             "suggestions": [brand_name],
@@ -494,30 +364,36 @@ JSON OUTPUT:"""
         }
 
 
-def find_competitors(first_party_brands: list, industry: str = "hotels", existing_competitors: list = None) -> Dict[str, Any]:
+def find_competitors(first_party_brands: list, industry: str = "hotels", existing_competitors: list | None = None) -> dict[str, Any]:
     """
     Use LLM to find competitor brands based on first-party brands.
-    
+
     This helps users discover competitors they should be tracking based on
     their own brand portfolio.
     """
     if existing_competitors is None:
         existing_competitors = []
-    
-    industry_preset = INDUSTRY_PRESETS.get(industry, INDUSTRY_PRESETS.get("custom", {}))
+
+    industry_preset = get_shared_preset(industry)
     industry_name = industry_preset.get("name", "General")
     entity_types = industry_preset.get("entity_types", ["brands", "companies"])
     example_brands = industry_preset.get("example_brands", [])
-    
-    brands_list = ", ".join(first_party_brands)
+
+    # Wrap user-supplied brand names to neutralize injection attempts.
+    brands_list = ", ".join(wrap_user_input(b, "brand") for b in first_party_brands if b)
     entity_types_str = ", ".join(entity_types) if entity_types else "brands and companies"
     examples_str = ", ".join(example_brands[:5]) if example_brands else "major brands in this industry"
-    
+
     # Build exclusion list
     exclude_brands = first_party_brands + existing_competitors
-    exclude_str = ", ".join(exclude_brands) if exclude_brands else "none"
-    
-    prompt = f"""You are a competitive intelligence expert for the {industry_name} industry.
+    exclude_str = (
+        ", ".join(wrap_user_input(b, "brand") for b in exclude_brands if b)
+        if exclude_brands else "none"
+    )
+
+    prompt = f"""{untrusted_input_system_instruction()}
+
+You are a competitive intelligence expert for the {industry_name} industry.
 
 INDUSTRY CONTEXT:
 - Entity types: {entity_types_str}
@@ -559,36 +435,19 @@ Aim for 10-20 relevant competitors.
 JSON OUTPUT:"""
 
     try:
-        response_text = invoke_converse(prompt, EXPANSION_MODEL_ID, max_tokens=2000, temperature=0)
-        
+        response_text = invoke_bedrock(prompt, ModelRole.ANALYSIS, max_tokens=2000, temperature=0)
+
         if not response_text:
             return {"first_party_brands": first_party_brands, "competitors": [], "error": "Empty response"}
-        
-        # Parse JSON from response
-        cleaned_text = response_text.strip()
-        if '```' in cleaned_text:
-            start_fence = cleaned_text.find('```')
-            if start_fence != -1:
-                newline_after_fence = cleaned_text.find('\n', start_fence)
-                if newline_after_fence != -1:
-                    cleaned_text = cleaned_text[newline_after_fence + 1:]
-                end_fence = cleaned_text.rfind('```')
-                if end_fence != -1:
-                    cleaned_text = cleaned_text[:end_fence].strip()
-        
-        start_idx = cleaned_text.find('{')
-        end_idx = cleaned_text.rfind('}') + 1
-        
-        if start_idx == -1 or end_idx == 0:
+
+        result = parse_llm_json(response_text, expect="object")
+        if result is None:
             return {"first_party_brands": first_party_brands, "competitors": [], "error": "Invalid response format"}
-        
-        json_str = cleaned_text[start_idx:end_idx]
-        result = json.loads(json_str)
-        
+
         # Extract just the competitor names
         competitors = result.get("competitors", [])
         competitor_names = [c.get("name") if isinstance(c, dict) else c for c in competitors]
-        
+
         return {
             "first_party_brands": first_party_brands,
             "competitors": competitor_names,
@@ -596,9 +455,9 @@ JSON OUTPUT:"""
             "notes": result.get("notes", ""),
             "industry": industry
         }
-        
+
     except Exception as e:
-        logger.error(f"Error finding competitors: {str(e)}")
+        logger.error(f"Error finding competitors: {e!s}")
         return {
             "first_party_brands": first_party_brands,
             "competitors": [],
@@ -606,29 +465,34 @@ JSON OUTPUT:"""
         }
 
 
-def get_config() -> Dict[str, Any]:
+def get_config() -> dict[str, Any]:
     """Get the current brand configuration."""
     table = dynamodb.Table(DYNAMODB_TABLE_BRAND_CONFIG)
     response = table.get_item(Key={'config_id': 'default'})
     return response.get('Item')
 
 
-def save_config(config: Dict[str, Any]) -> Dict[str, Any]:
+def save_config(config: dict[str, Any]) -> dict[str, Any]:
     """Save brand configuration."""
     table = dynamodb.Table(DYNAMODB_TABLE_BRAND_CONFIG)
-    
+
     config['config_id'] = 'default'
-    config['updated_at'] = datetime.utcnow().isoformat() + 'Z'
-    
+    config['updated_at'] = get_timestamp()
+
     table.put_item(Item=config)
     return config
 
 
 # --- Route Handlers ---
 
-def _get_presets(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
-    """GET /brand-config/presets - Return industry presets."""
-    return success_response({'presets': INDUSTRY_PRESETS}, event)
+def _get_presets(event: dict[str, Any], context: Any) -> dict[str, Any]:
+    """GET /brand-config/presets - Return industry presets decorated
+    with derived default prompts for the dashboard."""
+    presets_with_prompts = {
+        industry_id: _preset_with_prompt(preset)
+        for industry_id, preset in _BASE_PRESETS.items()
+    }
+    return success_response({'presets': presets_with_prompts}, event)
 
 
 @parse_json_body
@@ -637,7 +501,7 @@ def _get_presets(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     'industry': {'type': str, 'max_length': 50, 'default': 'hotels', 'source': 'body'},
     'existing_brands': {'type': list, 'default': [], 'source': 'body'}
 })
-def _expand_brand(event: Dict[str, Any], context: Any, body: Dict, brand_name: str, industry: str, existing_brands: list) -> Dict[str, Any]:
+def _expand_brand(event: dict[str, Any], context: Any, body: dict, brand_name: str, industry: str, existing_brands: list) -> dict[str, Any]:
     """POST /brand-config/expand - Expand a brand name to related sub-brands."""
     result = expand_brand(brand_name.strip(), industry, existing_brands)
     return success_response(result, event)
@@ -649,11 +513,11 @@ def _expand_brand(event: Dict[str, Any], context: Any, body: Dict, brand_name: s
     'industry': {'type': str, 'max_length': 50, 'default': 'hotels', 'source': 'body'},
     'brand_type': {'type': str, 'choices': ['first_party', 'competitor'], 'default': 'first_party', 'source': 'body'}
 })
-def _expand_all_brands(event: Dict[str, Any], context: Any, body: Dict, existing_brands: list, industry: str, brand_type: str) -> Dict[str, Any]:
+def _expand_all_brands(event: dict[str, Any], context: Any, body: dict, existing_brands: list, industry: str, brand_type: str) -> dict[str, Any]:
     """POST /brand-config/expand-all - Expand ALL brands to find missing sub-brands."""
     if not existing_brands:
         return validation_error('Please add at least one brand first', event, 'existing_brands')
-    
+
     result = expand_brands(existing_brands, industry, brand_type)
     return success_response(result, event)
 
@@ -664,19 +528,19 @@ def _expand_all_brands(event: Dict[str, Any], context: Any, body: Dict, existing
     'industry': {'type': str, 'max_length': 50, 'default': 'hotels', 'source': 'body'},
     'existing_competitors': {'type': list, 'default': [], 'source': 'body'}
 })
-def _find_competitors(event: Dict[str, Any], context: Any, body: Dict, first_party_brands: list, industry: str, existing_competitors: list) -> Dict[str, Any]:
+def _find_competitors(event: dict[str, Any], context: Any, body: dict, first_party_brands: list, industry: str, existing_competitors: list) -> dict[str, Any]:
     """POST /brand-config/find-competitors - Find competitors based on first-party brands."""
     if not first_party_brands:
         return validation_error('Missing required field: first_party_brands', event, 'first_party_brands')
-    
+
     result = find_competitors(first_party_brands, industry, existing_competitors)
     return success_response(result, event)
 
 
-def _get_config(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def _get_config(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """GET /brand-config - Get current configuration."""
     config = get_config()
-    
+
     if not config:
         # Return default config
         config = {
@@ -694,9 +558,9 @@ def _get_config(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             'custom_entity_types': [],
             'custom_prompt_additions': '',
             'industry_prompts': {},
-            'created_at': datetime.utcnow().isoformat() + 'Z'
+            'created_at': get_timestamp()
         }
-    
+
     return success_response(config, event)
 
 
@@ -704,16 +568,16 @@ def _get_config(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 @validate({
     'industry': {'required': True, 'type': str, 'source': 'body'}
 })
-def _save_config(event: Dict[str, Any], context: Any, body: Dict, industry: str) -> Dict[str, Any]:
+def _save_config(event: dict[str, Any], context: Any, body: dict, industry: str) -> dict[str, Any]:
     """POST/PUT /brand-config - Create or update configuration."""
     # Validate industry
-    if industry not in INDUSTRY_PRESETS:
+    if industry not in _BASE_PRESETS:
         return validation_error(
-            f"Invalid industry. Must be one of: {', '.join(INDUSTRY_PRESETS.keys())}",
+            f"Invalid industry. Must be one of: {', '.join(_BASE_PRESETS.keys())}",
             event,
             'industry'
         )
-    
+
     # Build config object
     config = {
         'industry': industry,
@@ -730,16 +594,16 @@ def _save_config(event: Dict[str, Any], context: Any, body: Dict, industry: str)
         'custom_prompt_additions': body.get('custom_prompt_additions', ''),
         'industry_prompts': body.get('industry_prompts', {})
     }
-    
+
     saved_config = save_config(config)
-    
+
     return success_response({
         'message': 'Configuration saved successfully',
         'config': saved_config
     }, event)
 
 
-def _reset_config(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def _reset_config(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """DELETE /brand-config - Reset to defaults."""
     default_config = {
         'industry': 'hotels',
@@ -756,9 +620,9 @@ def _reset_config(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         'custom_prompt_additions': '',
         'industry_prompts': {}
     }
-    
+
     saved_config = save_config(default_config)
-    
+
     return success_response({
         'message': 'Configuration reset to defaults',
         'config': saved_config
@@ -779,10 +643,10 @@ def _reset_config(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     'PUT': _save_config,
     'DELETE': _reset_config,
 })
-def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """
     API handler for brand configuration management.
-    
+
     GET /brand-config - Get current configuration
     GET /brand-config/presets - Get all industry presets
     POST /brand-config - Create/update configuration

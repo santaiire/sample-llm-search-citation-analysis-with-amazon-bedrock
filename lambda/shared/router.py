@@ -21,7 +21,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
-from typing import Callable, Dict
+from collections.abc import Callable
 
 
 class HandlerLoader:
@@ -41,7 +41,7 @@ class HandlerLoader:
                 relative to this file's directory.
         """
         self._dir = os.path.dirname(os.path.abspath(router_file))
-        self._cache: Dict[str, Callable] = {}
+        self._cache: dict[str, Callable] = {}
 
     def get(self, filename: str) -> Callable:
         """
@@ -77,4 +77,61 @@ class HandlerLoader:
         return handler_fn
 
 
-__all__ = ['HandlerLoader']
+__all__ = ['HandlerLoader', 'path_contains_segment', 'path_matches_route']
+
+
+def path_contains_segment(segment: str, request_path: str) -> bool:
+    """Return True iff ``segment`` appears as a complete path segment in ``request_path``.
+
+    A segment is a match iff one of:
+    - The request path equals the segment exactly.
+    - The request path ends with the segment preceded by ``/``
+      (``endswith`` is sufficient when segment starts with ``/``).
+    - The request path contains ``segment + '/'`` (interior child).
+
+    This is the core primitive both `path_matches_route` and the
+    tuple-key `route_handler` matcher are built on. Centralizing it
+    prevents the substring-collision bug from creeping back in
+    (`/api/stats-bogus` matching `/api/stats`). See audit item 26.
+
+    Precondition: ``segment`` starts with ``/``.
+    """
+    if not request_path:
+        return False
+    if request_path == segment:
+        return True
+    # `/ideas` will not end-match `/my-ideas` because the leading `/` of
+    # segment forces a boundary character. Works for any segment that
+    # begins with `/`.
+    if request_path.endswith(segment):
+        return True
+    return (segment + '/') in request_path
+
+
+def path_matches_route(route_path: str, resource: str, path: str) -> bool:
+    """Return True iff ``resource`` or ``path`` is ``route_path`` or a child.
+
+    Used by consolidated routers (`stats-insights`, `citations-content`,
+    etc.) which test both the API Gateway template ``resource`` and the
+    concrete request ``path`` against a route prefix.
+
+    The match predicate here is prefix-based (route matches itself or any
+    segment-child), NOT suffix-based — it's the opposite of
+    `path_contains_segment`, which is for sub-route matching within a
+    longer path.
+
+    Args:
+        route_path: The route prefix (e.g. ``/api/stats``, no trailing slash).
+        resource: API Gateway ``resource`` field.
+        path: API Gateway ``path`` field.
+    """
+    for candidate in (resource, path):
+        if not candidate:
+            continue
+        if candidate == route_path:
+            return True
+        # Segment-child match: `/api/stats/summary` is under `/api/stats`
+        # but `/api/stats-bogus` is not.
+        if candidate.startswith(route_path + '/'):
+            return True
+    return False

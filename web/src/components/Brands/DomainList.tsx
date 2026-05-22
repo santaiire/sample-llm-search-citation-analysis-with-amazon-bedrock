@@ -20,11 +20,13 @@ export const DomainList = ({
     </p>
     <div className="flex gap-2 mb-3">
       <input
+        id="new-first-party-domain"
         type="text"
         value={newDomain}
         onChange={(e) => onNewDomainChange(e.target.value)}
         onKeyDown={(e) => e.key === 'Enter' && onAddDomain()}
         placeholder="e.g., example.com, brand.com"
+        aria-label="New first party domain"
         className="flex-1 p-2 border border-emerald-300 rounded-lg focus:ring-2 focus:ring-emerald-500 bg-white text-sm"
       />
       <button

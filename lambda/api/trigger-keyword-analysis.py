@@ -5,19 +5,21 @@ Starts a Step Functions execution with specific keywords.
 """
 
 import json
-import boto3
-import sys
 import logging
-from typing import Dict, Any, List
 import os
-from datetime import datetime
+import sys
+from typing import Any
+
+import boto3
 
 # Add shared module to path
 sys.path.insert(0, '/opt/python')
 
-from shared.decorators import api_handler, parse_json_body, validate
-from shared.api_response import success_response, validation_error
 from boto3.dynamodb.conditions import Key
+
+from shared.api_response import success_response, validation_error
+from shared.decorators import api_handler, parse_json_body, validate
+from shared.utils import get_timestamp, get_timestamp_compact
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -36,29 +38,29 @@ query_prompts_table = dynamodb.Table(QUERY_PROMPTS_TABLE)
 @validate({
     'keywords': {'required': True, 'source': 'body'}
 })
-def handler(event: Dict[str, Any], context: Any, body: Dict, keywords) -> Dict[str, Any]:
+def handler(event: dict[str, Any], context: Any, body: dict, keywords) -> dict[str, Any]:
     """
     POST /api/trigger-keyword-analysis
-    
+
     Body: {
         "keywords": ["keyword1", "keyword2"]  // Array of keyword strings
     }
-    
+
     Starts a Step Functions execution with the specified keywords.
     """
     keywords_input = keywords
-    
+
     if not keywords_input:
         return validation_error('No keywords provided. Please provide a "keywords" array in the request body.', event, 'keywords')
-    
+
     # Ensure keywords is a list
     if isinstance(keywords_input, str):
         keywords_input = [keywords_input]
-    
+
     # Input validation - limit number of keywords
     if len(keywords_input) > 100:
         return validation_error('Too many keywords (max 100)', event, 'keywords')
-    
+
     # Format keywords for Step Functions
     keyword_list = []
     for kw in keywords_input:
@@ -67,12 +69,12 @@ def handler(event: Dict[str, Any], context: Any, body: Dict, keywords) -> Dict[s
         if keyword_text and len(keyword_text) <= 500:
             keyword_list.append({
                 'keyword': keyword_text,
-                'timestamp': datetime.utcnow().isoformat() + 'Z'
+                'timestamp': get_timestamp()
             })
-    
+
     if not keyword_list:
         return validation_error('No valid keywords provided.', event, 'keywords')
-    
+
     # Fetch enabled query prompts
     query_prompts = []
     try:
@@ -89,10 +91,10 @@ def handler(event: Dict[str, Any], context: Any, body: Dict, keywords) -> Dict[s
             })
     except Exception as e:
         logger.warning(f"Could not fetch query prompts, proceeding without them: {e}")
-    
+
     # Start Step Functions execution
-    execution_name = f"keyword-analysis-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
-    
+    execution_name = f"keyword-analysis-{get_timestamp_compact()}"
+
     execution_response = stepfunctions.start_execution(
         stateMachineArn=STATE_MACHINE_ARN,
         name=execution_name,
@@ -101,7 +103,7 @@ def handler(event: Dict[str, Any], context: Any, body: Dict, keywords) -> Dict[s
             'query_prompts': query_prompts
         })
     )
-    
+
     return success_response({
         'execution_arn': execution_response['executionArn'],
         'execution_name': execution_name,

@@ -2,20 +2,27 @@
 Get URL Breakdown API Lambda
 
 Returns keywords and providers that cited a specific URL.
+
+Backed by the ``UrlIndex`` GSI on the Citations table (PK=normalized_url,
+SK=keyword, projection=ALL). Replaces the previous full-scan over
+SearchResults — see audit item: "consider adding a GSI on citations or
+maintaining a separate URL-to-keyword mapping table".
 """
 
-import sys
 import logging
-import boto3
-from typing import Dict, Any, List
-import os
+import sys
+from typing import Any
 from urllib.parse import unquote
+
+import boto3
+from boto3.dynamodb.conditions import Key
 
 # Add shared module to path
 sys.path.insert(0, '/opt/python')
 
-from shared.decorators import api_handler, validate
 from shared.api_response import success_response
+from shared.decorators import api_handler, validate
+from shared.env_vars import resolve_table_env
 from shared.utils import normalize_url
 
 logger = logging.getLogger(__name__)
@@ -23,88 +30,123 @@ logger.setLevel(logging.INFO)
 
 dynamodb = boto3.resource('dynamodb')
 
-# Fail-fast: Required environment variables
-SEARCH_RESULTS_TABLE = os.environ['SEARCH_RESULTS_TABLE']
-search_results_table = dynamodb.Table(SEARCH_RESULTS_TABLE)
+# Fail-fast: Required environment variables (audit #12 canonical naming).
+CITATIONS_TABLE = resolve_table_env(
+    'DYNAMODB_TABLE_CITATIONS', 'CITATIONS_TABLE',
+)
+citations_table = dynamodb.Table(CITATIONS_TABLE)
+
+# Inverse index GSI: PK=normalized_url, SK=keyword, projection=ALL.
+URL_INDEX_NAME = 'UrlIndex'
+
+# Pagination cap. Each page is up to 1 MB; with the deduplicated Citations
+# rows (a few hundred bytes each) and the cap of MAX_CITATIONS_PER_KEYWORD
+# rows per keyword, even a globally cited URL stays well under this limit.
+_MAX_QUERY_PAGES = 10
 
 
-def _normalize_for_comparison(url: str) -> str:
-    """Normalize URL for comparison - lowercase and remove trailing slash."""
-    normalized = normalize_url(url)
-    # Additional normalization for comparison
-    normalized = normalized.lower().rstrip('/')
-    return normalized
+def _query_url_index(target_normalized: str) -> list[dict[str, Any]]:
+    """
+    Query the ``UrlIndex`` GSI for every Citations row whose ``normalized_url``
+    matches the target. Returns the raw items so the caller can shape the
+    response.
+    """
+    items: list[dict[str, Any]] = []
+    pages = 0
+    last_evaluated_key: dict[str, Any] | None = None
+
+    while pages < _MAX_QUERY_PAGES:
+        query_kwargs: dict[str, Any] = {
+            'IndexName': URL_INDEX_NAME,
+            'KeyConditionExpression': Key('normalized_url').eq(target_normalized),
+        }
+        if last_evaluated_key:
+            query_kwargs['ExclusiveStartKey'] = last_evaluated_key
+
+        response = citations_table.query(**query_kwargs)
+        items.extend(response.get('Items', []))
+        pages += 1
+
+        last_evaluated_key = response.get('LastEvaluatedKey')
+        if not last_evaluated_key:
+            break
+
+    if last_evaluated_key:
+        logger.warning(
+            "UrlIndex query hit the %d-page cap (url=%s, items=%d). "
+            "Results are truncated.",
+            _MAX_QUERY_PAGES, target_normalized, len(items),
+        )
+
+    return items
 
 
-def _urls_match(url1: str, url2: str) -> bool:
-    """Check if two URLs match after normalization."""
-    return _normalize_for_comparison(url1) == _normalize_for_comparison(url2)
+def _expand_to_breakdown(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Each Citations row aggregates citing_providers; the breakdown response
+    expands one entry per (keyword, provider) pair so existing UI consumers
+    keep working unchanged.
+    """
+    breakdown: list[dict[str, Any]] = []
+    for item in items:
+        keyword = item.get('keyword', '')
+        # last_updated is the most recent run that wrote this row; if
+        # missing fall back to first_seen for legacy rows pre-dating the
+        # field.
+        timestamp = item.get('last_updated') or item.get('first_seen', '')
+
+        providers = item.get('citing_providers') or []
+        if not providers:
+            # Legacy rows without provider tracking still represent a
+            # citation event; surface them with provider="" rather than
+            # dropping them.
+            breakdown.append({
+                'keyword': keyword,
+                'provider': '',
+                'timestamp': timestamp,
+            })
+            continue
+
+        for provider in providers:
+            breakdown.append({
+                'keyword': keyword,
+                'provider': provider,
+                'timestamp': timestamp,
+            })
+
+    return breakdown
 
 
 @api_handler
 @validate({
     'url': {'required': True, 'type': str, 'max_length': 2048}
 })
-def handler(event: Dict[str, Any], context: Any, url: str) -> Dict[str, Any]:
+def handler(event: dict[str, Any], context: Any, url: str) -> dict[str, Any]:
     """
     GET /api/url-breakdown?url=https://example.com
-    
-    Returns breakdown of which keywords and providers cited this URL.
+
+    Returns a breakdown of which keywords and providers cited this URL.
+    Implementation queries the ``UrlIndex`` GSI on the Citations table
+    instead of scanning SearchResults.
     """
-    # URL decode in case it's encoded
     target_url = unquote(url)
-    target_normalized = _normalize_for_comparison(target_url)
-    
-    logger.info(f"Looking for URL: {target_url}")
-    logger.info(f"Normalized target: {target_normalized}")
-    
-    # Scan all search results with pagination
-    # Note: For better performance at scale, consider adding a GSI on citations
-    # or maintaining a separate URL-to-keyword mapping table
-    breakdown = []
-    last_evaluated_key = None
-    items_scanned = 0
-    max_items = 5000  # Safety limit
-    
-    while items_scanned < max_items:
-        scan_params = {'Limit': 500}
-        if last_evaluated_key:
-            scan_params['ExclusiveStartKey'] = last_evaluated_key
-        
-        response = search_results_table.scan(**scan_params)
-        items = response.get('Items', [])
-        items_scanned += len(items)
-        
-        # Find all keyword-provider combinations that cited this URL
-        for item in items:
-            citations = item.get('citations', [])
-            keyword = item.get('keyword', '')
-            provider = item.get('provider', '')
-            timestamp = item.get('timestamp', '')
-            
-            # Check if this URL is in the citations (with normalized comparison)
-            for citation in citations:
-                citation_url = citation if isinstance(citation, str) else citation.get('S', '')
-                if citation_url and _urls_match(citation_url, target_url):
-                    breakdown.append({
-                        'keyword': keyword,
-                        'provider': provider,
-                        'timestamp': timestamp
-                    })
-                    break  # Only count once per search result
-        
-        # Check if there are more items to scan
-        last_evaluated_key = response.get('LastEvaluatedKey')
-        if not last_evaluated_key:
-            break
-    
-    logger.info(f"Scanned {items_scanned} items, found {len(breakdown)} matches")
-    
-    # Sort by timestamp (most recent first)
-    breakdown.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
-    
+    target_normalized = normalize_url(target_url)
+
+    logger.info("Looking up URL %s (normalized: %s)", target_url, target_normalized)
+
+    items = _query_url_index(target_normalized)
+    breakdown = _expand_to_breakdown(items)
+
+    # Sort by timestamp (most recent first) for stable, user-friendly output.
+    breakdown.sort(key=lambda entry: entry.get('timestamp', ''), reverse=True)
+
+    logger.info(
+        "Returning %d breakdown entries from %d Citations rows for %s",
+        len(breakdown), len(items), target_normalized,
+    )
+
     return success_response({
         'url': target_url,
         'total_citations': len(breakdown),
-        'breakdown': breakdown
+        'breakdown': breakdown,
     }, event)

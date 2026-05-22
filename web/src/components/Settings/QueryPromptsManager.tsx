@@ -3,10 +3,27 @@
  *
  * Each persona represents a user profile (e.g. "Family Traveler", "Student")
  * whose context is injected into AI queries to see how responses change.
+ *
+ * Visual styling follows the design system documented in
+ * `docs/design-system.md`:
+ *   - Action icons use the shared Heroicons-style outline set from
+ *     `components/ui/Icons.tsx` (matches the sidebar icon language).
+ *   - Buttons use the `<Button>` component so primary/ghost variants stay
+ *     consistent with the rest of the app and adapt to dark mode.
+ *   - Surfaces, borders, and text rely on Tailwind tokens that are mapped
+ *     to dark-mode equivalents through global overrides in `index.css`.
  */
 import { useState } from 'react';
 import { useQueryPrompts } from '../../hooks/useQueryPrompts';
 import type { QueryPrompt } from '../../types';
+import {
+  Button,
+  PauseIcon,
+  PencilIcon,
+  PlayIcon,
+  PlusIcon,
+  TrashIcon,
+} from '../ui';
 
 const SAMPLE_KEYWORD = 'best hotels in Barcelona';
 
@@ -117,17 +134,16 @@ function PersonaForm({
         <PromptPreview template={template} />
       </div>
       <div className="flex gap-2">
-        <button
+        <Button
           type="submit"
           disabled={saving || !name.trim() || !template.trim()}
-          className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {saving ? 'Saving...' : submitLabel}
-        </button>
+        </Button>
         {onCancel && (
-          <button type="button" onClick={onCancel} className="px-4 py-2 text-gray-600 text-sm hover:text-gray-900">
+          <Button type="button" variant="ghost" onClick={onCancel}>
             Cancel
-          </button>
+          </Button>
         )}
       </div>
     </form>
@@ -190,6 +206,9 @@ function PersonaRow({
   const statusLabel = isEnabled ? 'Enabled' : 'Disabled';
   const rowClass = isEnabled ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60';
 
+  const toggleTitle = isEnabled ? 'Disable persona' : 'Enable persona';
+  const ToggleIcon = isEnabled ? PauseIcon : PlayIcon;
+
   return (
     <div className={`p-4 border rounded-lg ${rowClass}`}>
       <div className="flex items-center justify-between">
@@ -206,34 +225,36 @@ function PersonaRow({
           <p className="text-xs text-gray-400 mt-1 truncate">{prompt.template}</p>
         </div>
         <div className="flex items-center gap-1 ml-3">
-          <button
+          <Button
+            variant="iconOnly"
+            size="sm"
             onClick={handleToggle}
             disabled={toggling}
-            className="p-1.5 text-gray-400 hover:text-gray-600 rounded"
-            title={isEnabled ? 'Disable' : 'Enable'}
-            aria-label={isEnabled ? 'Disable persona' : 'Enable persona'}
+            title={toggleTitle}
+            aria-label={toggleTitle}
           >
-            {toggling && '...'}
-            {!toggling && isEnabled && '⏸'}
-            {!toggling && !isEnabled && '▶'}
-          </button>
-          <button
+            <ToggleIcon className="w-4 h-4" />
+          </Button>
+          <Button
+            variant="iconOnly"
+            size="sm"
             onClick={() => setEditing(true)}
-            className="p-1.5 text-gray-400 hover:text-gray-600 rounded"
-            title="Edit"
+            title="Edit persona"
             aria-label="Edit persona"
           >
-            ✏️
-          </button>
-          <button
+            <PencilIcon className="w-4 h-4" />
+          </Button>
+          <Button
+            variant="iconOnly"
+            size="sm"
             onClick={handleDelete}
             disabled={deleting}
-            className="p-1.5 text-gray-400 hover:text-red-600 rounded"
-            title="Delete"
+            title="Delete persona"
             aria-label="Delete persona"
+            className="hover:text-red-600"
           >
-            {deleting ? '...' : '🗑'}
-          </button>
+            <TrashIcon className="w-4 h-4" />
+          </Button>
         </div>
       </div>
     </div>
@@ -257,12 +278,12 @@ export function QueryPromptsManager() {
           </p>
         </div>
         {!showCreate && prompts.length < 10 && (
-          <button
+          <Button
             onClick={() => setShowCreate(true)}
-            className="px-3 py-1.5 bg-gray-900 text-white rounded-lg text-sm hover:bg-gray-800"
+            leadingIcon={<PlusIcon className="w-4 h-4" />}
           >
-            + New Persona
-          </button>
+            New Persona
+          </Button>
         )}
       </div>
 

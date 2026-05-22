@@ -1,4 +1,5 @@
 import type { BrandExpansionAllResult } from '../../hooks/useBrandConfig';
+import { WarningIcon } from '../ui';
 
 interface BrandExpansionPanelProps {
   readonly result: BrandExpansionAllResult;
@@ -69,7 +70,10 @@ export const BrandExpansionPanel = ({
 
       {result.duplicates_found && result.duplicates_found.length > 0 && (
         <div className={`mb-3 p-2 ${duplicatesBg} border rounded-lg`}>
-          <p className={`text-xs font-medium ${duplicatesText} mb-1`}>⚠️ Potential duplicates in your list:</p>
+          <p className={`flex items-center gap-1.5 text-xs font-medium ${duplicatesText} mb-1`}>
+            <WarningIcon className="w-3.5 h-3.5" />
+            Potential duplicates in your list:
+          </p>
           <ul className={`text-xs ${duplicatesSubtext} space-y-1`}>
             {result.duplicates_found.map((dup) => (
               <li key={`${dup.brand}-${dup.duplicate_of}`}>

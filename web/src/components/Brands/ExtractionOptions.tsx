@@ -37,8 +37,9 @@ export const ExtractionOptions = ({
         <span className="text-sm text-gray-700">Include ranking context</span>
       </label>
       <div className="flex items-center gap-3">
-        <span className="text-sm text-gray-700">Max brands per response:</span>
+        <label htmlFor="max-brands" className="text-sm text-gray-700">Max brands per response:</label>
         <input
+          id="max-brands"
           type="number"
           value={maxBrands}
           onChange={(e) => onMaxBrandsChange(parseInt(e.target.value, 10) || 20)}
