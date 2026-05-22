@@ -16,6 +16,7 @@ sys.path.insert(0, '/opt/python')
 
 from shared.api_response import success_response
 from shared.decorators import api_handler, optional_limit, validate
+from shared.env_vars import resolve_table_env
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -23,8 +24,10 @@ logger.setLevel(logging.INFO)
 dynamodb = boto3.resource('dynamodb')
 s3_client = boto3.client('s3')
 
-# Fail-fast: Required environment variables
-CRAWLED_CONTENT_TABLE = os.environ['CRAWLED_CONTENT_TABLE']
+# Fail-fast: Required environment variables (audit #12 canonical naming).
+CRAWLED_CONTENT_TABLE = resolve_table_env(
+    'DYNAMODB_TABLE_CRAWLED_CONTENT', 'CRAWLED_CONTENT_TABLE',
+)
 
 
 def generate_presigned_url(s3_uri: str, expiration: int = 900) -> str:

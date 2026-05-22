@@ -72,7 +72,14 @@ def get_extraction_config() -> dict[str, Any]:
 SECRETS_PREFIX = os.environ.get('SECRETS_PREFIX', 'citation-analysis/')
 DYNAMODB_TABLE_SEARCH_RESULTS = os.environ.get('DYNAMODB_TABLE_SEARCH_RESULTS')
 RAW_RESPONSES_BUCKET = os.environ.get('RAW_RESPONSES_BUCKET')
-PROVIDER_CONFIG_TABLE = os.environ.get('PROVIDER_CONFIG_TABLE', 'CitationAnalysis-ProviderConfig')
+# Provider config table — canonical name first, legacy fallback for in-flight
+# deploys. Default mirrors the CDK resource name so a bootstrap deploy works
+# even before env vars flow through. Audit #12.
+PROVIDER_CONFIG_TABLE = (
+    os.environ.get('DYNAMODB_TABLE_PROVIDER_CONFIG')
+    or os.environ.get('PROVIDER_CONFIG_TABLE')
+    or 'CitationAnalysis-ProviderConfig'
+)
 
 # Cache for secrets with TTL
 _secrets_cache = {}

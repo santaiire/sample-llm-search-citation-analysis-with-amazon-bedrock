@@ -19,6 +19,7 @@ sys.path.insert(0, '/opt/python')
 from shared.api_response import success_response
 from shared.config import PROVIDERS
 from shared.decorators import api_handler, optional_provider, validate
+from shared.env_vars import resolve_table_env
 from shared.utils import get_timestamp
 
 logger = logging.getLogger(__name__)
@@ -26,11 +27,11 @@ logger.setLevel(logging.INFO)
 
 dynamodb = boto3.resource('dynamodb')
 
-# Fail-fast: Required environment variables
-SEARCH_RESULTS_TABLE = os.environ['SEARCH_RESULTS_TABLE']
-CITATIONS_TABLE = os.environ['CITATIONS_TABLE']
-CRAWLED_CONTENT_TABLE = os.environ['CRAWLED_CONTENT_TABLE']
-KEYWORDS_TABLE = os.environ['KEYWORDS_TABLE']
+# Fail-fast: Required environment variables (audit #12 canonical naming).
+SEARCH_RESULTS_TABLE = resolve_table_env('DYNAMODB_TABLE_SEARCH_RESULTS', 'SEARCH_RESULTS_TABLE')
+CITATIONS_TABLE = resolve_table_env('DYNAMODB_TABLE_CITATIONS', 'CITATIONS_TABLE')
+CRAWLED_CONTENT_TABLE = resolve_table_env('DYNAMODB_TABLE_CRAWLED_CONTENT', 'CRAWLED_CONTENT_TABLE')
+KEYWORDS_TABLE = resolve_table_env('DYNAMODB_TABLE_KEYWORDS', 'KEYWORDS_TABLE')
 
 search_results_table = dynamodb.Table(SEARCH_RESULTS_TABLE)
 citations_table = dynamodb.Table(CITATIONS_TABLE)

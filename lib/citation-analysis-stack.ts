@@ -695,6 +695,8 @@ export class CitationAnalysisStack extends cdk.Stack {
       description: 'Parse keywords from S3 or direct input',
       logGroup: parseKeywordsLogGroup,
       environment: {
+        // Audit #12 canonical name + legacy for in-flight rollouts.
+        DYNAMODB_TABLE_KEYWORDS: keywordsTable.tableName,
         KEYWORDS_TABLE: keywordsTable.tableName,
       },
     });
@@ -724,9 +726,12 @@ export class CitationAnalysisStack extends cdk.Stack {
       environment: {
         DYNAMODB_TABLE_SEARCH_RESULTS: searchResultsTable.tableName,
         DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName,
+        // Canonical name (audit #12). Legacy PROVIDER_CONFIG_TABLE kept for
+        // in-flight deploys; can be dropped after one full rollout.
+        DYNAMODB_TABLE_PROVIDER_CONFIG: providerConfigTable.tableName,
+        PROVIDER_CONFIG_TABLE: providerConfigTable.tableName,
         SECRETS_PREFIX: 'citation-analysis/',
         RAW_RESPONSES_BUCKET: rawResponsesBucket.bucketName,
-        PROVIDER_CONFIG_TABLE: providerConfigTable.tableName,
         ...bedrockTierEnv,
       },
     });
@@ -752,7 +757,12 @@ export class CitationAnalysisStack extends cdk.Stack {
       memorySize: 256,
       description: 'Deduplicate and prioritize citations',
       logGroup: deduplicationLogGroup,
-      environment: {CITATIONS_TABLE_NAME: citationsTable.tableName,},
+      environment: {
+        // Canonical name (audit #12). Legacy CITATIONS_TABLE_NAME kept for
+        // in-flight deploys; can be dropped after one full rollout.
+        DYNAMODB_TABLE_CITATIONS: citationsTable.tableName,
+        CITATIONS_TABLE_NAME: citationsTable.tableName,
+      },
     });
 
     // Crawler Lambda Layer - Browser tools (Playwright + AgentCore)
@@ -1167,17 +1177,19 @@ export class CitationAnalysisStack extends cdk.Stack {
       memorySize: 512,
       description: 'API: Consolidated stats, visibility, insights, gaps, recommendations, and trends',
       environment: {
-        // get-stats env vars
-        SEARCH_RESULTS_TABLE: searchResultsTable.tableName,
-        CITATIONS_TABLE: citationsTable.tableName,
-        CRAWLED_CONTENT_TABLE: crawledContentTable.tableName,
-        KEYWORDS_TABLE: keywordsTable.tableName,
-        // visibility/insights env vars
+        // Audit #12: canonical DYNAMODB_TABLE_* names. Legacy names kept
+        // for in-flight deploys; can be dropped after one full rollout.
         DYNAMODB_TABLE_SEARCH_RESULTS: searchResultsTable.tableName,
         DYNAMODB_TABLE_CITATIONS: citationsTable.tableName,
         DYNAMODB_TABLE_CRAWLED_CONTENT: crawledContentTable.tableName,
         DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName,
         DYNAMODB_TABLE_KEYWORDS: keywordsTable.tableName,
+        DYNAMODB_TABLE_PROVIDER_CONFIG: providerConfigTable.tableName,
+        // Legacy names (to be removed once rollout is verified):
+        SEARCH_RESULTS_TABLE: searchResultsTable.tableName,
+        CITATIONS_TABLE: citationsTable.tableName,
+        CRAWLED_CONTENT_TABLE: crawledContentTable.tableName,
+        KEYWORDS_TABLE: keywordsTable.tableName,
         PROVIDER_CONFIG_TABLE: providerConfigTable.tableName,
         ...bedrockTierEnv,
       },
@@ -1203,9 +1215,14 @@ export class CitationAnalysisStack extends cdk.Stack {
       memorySize: 256,
       description: 'API: Consolidated citations, URL breakdown, searches, crawled content, and raw responses',
       environment: {
+        // Audit #12 canonical names.
+        DYNAMODB_TABLE_CITATIONS: citationsTable.tableName,
+        DYNAMODB_TABLE_SEARCH_RESULTS: searchResultsTable.tableName,
+        DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName,
+        DYNAMODB_TABLE_CRAWLED_CONTENT: crawledContentTable.tableName,
+        // Legacy names, dropped once rollout verified.
         CITATIONS_TABLE: citationsTable.tableName,
         SEARCH_RESULTS_TABLE: searchResultsTable.tableName,
-        DYNAMODB_TABLE_BRAND_CONFIG: brandConfigTable.tableName,
         CRAWLED_CONTENT_TABLE: crawledContentTable.tableName,
         RAW_RESPONSES_BUCKET: rawResponsesBucket.bucketName,
         SCREENSHOTS_BUCKET: screenshotsBucket.bucketName,
@@ -1256,6 +1273,10 @@ export class CitationAnalysisStack extends cdk.Stack {
       memorySize: 256,
       description: 'API: Consolidated keyword get/create/update/delete and keyword research',
       environment: {
+        // Audit #12 canonical names.
+        DYNAMODB_TABLE_KEYWORDS: keywordsTable.tableName,
+        DYNAMODB_TABLE_KEYWORD_RESEARCH: keywordResearchTable.tableName,
+        // Legacy names, dropped once rollout verified.
         KEYWORDS_TABLE: keywordsTable.tableName,
         KEYWORD_RESEARCH_TABLE: keywordResearchTable.tableName,
         SECRETS_PREFIX: 'citation-analysis/',
@@ -1278,10 +1299,14 @@ export class CitationAnalysisStack extends cdk.Stack {
       memorySize: 256,
       description: 'API: Consolidated query prompts, schedules, and provider config',
       environment: {
+        // Audit #12 canonical names.
+        DYNAMODB_TABLE_QUERY_PROMPTS: queryPromptsTable.tableName,
+        DYNAMODB_TABLE_PROVIDER_CONFIG: providerConfigTable.tableName,
+        // Legacy names, dropped once rollout verified.
         QUERY_PROMPTS_TABLE: queryPromptsTable.tableName,
+        PROVIDER_CONFIG_TABLE: providerConfigTable.tableName,
         STATE_MACHINE_ARN: stateMachine.stateMachineArn,
         SCHEDULE_ROLE_ARN: schedulerRole.roleArn,
-        PROVIDER_CONFIG_TABLE: providerConfigTable.tableName,
         SECRETS_PREFIX: 'citation-analysis/',
       },
     });
@@ -1303,6 +1328,10 @@ export class CitationAnalysisStack extends cdk.Stack {
       description: 'API: Consolidated trigger analysis and execution status',
       environment: {
         STATE_MACHINE_ARN: stateMachine.stateMachineArn,
+        // Audit #12 canonical names.
+        DYNAMODB_TABLE_KEYWORDS: keywordsTable.tableName,
+        DYNAMODB_TABLE_QUERY_PROMPTS: queryPromptsTable.tableName,
+        // Legacy names, dropped once rollout verified.
         KEYWORDS_TABLE: keywordsTable.tableName,
         QUERY_PROMPTS_TABLE: queryPromptsTable.tableName,
       },

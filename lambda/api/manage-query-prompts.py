@@ -18,6 +18,7 @@ sys.path.insert(0, '/opt/python')
 from shared.api_response import success_response, validation_error
 from shared.constants import MAX_QUERY_PROMPTS_DEFAULT
 from shared.decorators import api_handler, parse_json_body, validate
+from shared.env_vars import resolve_table_env
 from shared.utils import get_timestamp
 
 logger = logging.getLogger(__name__)
@@ -25,8 +26,10 @@ logger.setLevel(logging.INFO)
 
 dynamodb = boto3.resource('dynamodb')
 
-# Fail-fast: Required environment variables
-QUERY_PROMPTS_TABLE = os.environ['QUERY_PROMPTS_TABLE']
+# Fail-fast: Required environment variables (audit #12 canonical naming).
+QUERY_PROMPTS_TABLE = resolve_table_env(
+    'DYNAMODB_TABLE_QUERY_PROMPTS', 'QUERY_PROMPTS_TABLE',
+)
 query_prompts_table = dynamodb.Table(QUERY_PROMPTS_TABLE)
 
 # Soft business cap — bounded per-user prompts. Override with

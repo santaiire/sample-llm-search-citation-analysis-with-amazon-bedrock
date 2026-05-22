@@ -27,7 +27,11 @@ logger.setLevel(logging.INFO)
 s3_client = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
 
-KEYWORDS_TABLE = os.environ.get('KEYWORDS_TABLE', 'CitationAnalysis-Keywords')
+KEYWORDS_TABLE = (
+    os.environ.get('DYNAMODB_TABLE_KEYWORDS')
+    or os.environ.get('KEYWORDS_TABLE')
+    or 'CitationAnalysis-Keywords'
+)
 
 
 def read_keywords_from_dynamodb() -> list[str]:

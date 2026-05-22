@@ -17,6 +17,7 @@ sys.path.insert(0, '/opt/python')
 
 from shared.api_response import success_response
 from shared.decorators import api_handler, validate
+from shared.env_vars import resolve_table_env
 from shared.utils import normalize_url
 
 logger = logging.getLogger(__name__)
@@ -24,8 +25,10 @@ logger.setLevel(logging.INFO)
 
 dynamodb = boto3.resource('dynamodb')
 
-# Fail-fast: Required environment variables
-SEARCH_RESULTS_TABLE = os.environ['SEARCH_RESULTS_TABLE']
+# Fail-fast: Required environment variables (audit #12 canonical naming).
+SEARCH_RESULTS_TABLE = resolve_table_env(
+    'DYNAMODB_TABLE_SEARCH_RESULTS', 'SEARCH_RESULTS_TABLE',
+)
 search_results_table = dynamodb.Table(SEARCH_RESULTS_TABLE)
 
 

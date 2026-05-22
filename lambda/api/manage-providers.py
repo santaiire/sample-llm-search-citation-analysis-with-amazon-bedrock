@@ -17,6 +17,7 @@ sys.path.insert(0, '/opt/python')
 
 from shared.api_response import api_response, not_found_response, success_response, validation_error
 from shared.decorators import api_handler, cors_preflight, parse_json_body, route_handler
+from shared.env_vars import resolve_table_env
 from shared.utils import get_timestamp
 
 logger = logging.getLogger(__name__)
@@ -25,8 +26,10 @@ logger.setLevel(logging.INFO)
 secrets_client = boto3.client('secretsmanager')
 dynamodb = boto3.resource('dynamodb')
 
-# Fail-fast: Required environment variables
-PROVIDER_CONFIG_TABLE = os.environ['PROVIDER_CONFIG_TABLE']
+# Fail-fast: Required environment variables (audit #12 canonical naming).
+PROVIDER_CONFIG_TABLE = resolve_table_env(
+    'DYNAMODB_TABLE_PROVIDER_CONFIG', 'PROVIDER_CONFIG_TABLE',
+)
 SECRETS_PREFIX = os.environ.get('SECRETS_PREFIX', 'citation-analysis/')
 
 # Provider type constants
