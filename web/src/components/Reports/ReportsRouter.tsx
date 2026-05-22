@@ -1,0 +1,61 @@
+import {
+  Routes, Route, Navigate,
+} from 'react-router-dom';
+import {
+  lazy, Suspense 
+} from 'react';
+import { Spinner } from '../ui/Spinner';
+import { ErrorBoundary } from '../ErrorBoundary';
+import { ReportsLandingView } from './ReportsLandingView';
+import type { Keyword } from '../../types';
+
+/**
+ * Reports load lazily so a user who never opens the Reporting section doesn't
+ * pay the bundle cost. Each report's data hooks pull a fair amount of code
+ * (chart libraries, persona logic, etc.), so the lazy boundary is per-report.
+ */
+const KeywordDeepDiveReport = lazy(() =>
+  import('./KeywordDeepDiveReport').then((m) => ({default: m.KeywordDeepDiveReport,})),
+);
+
+interface Props {readonly keywords: ReadonlyArray<Keyword>;}
+
+function ReportFallback() {
+  return (
+    <div className="flex items-center justify-center py-12">
+      <Spinner size="lg" />
+    </div>
+  );
+}
+
+/**
+ * Sub-router for `/reports/*` paths.
+ *
+ * Lives parallel to the dashboard's `TabContent` rather than inside it because
+ * reports use parameterised URLs (`/reports/keyword/:keyword?`) and need the
+ * full `react-router-dom` `Routes` machinery, while `TabContent` is a switch
+ * over a flat tab id.
+ *
+ * As each new report ships it gets a `<Route>` here. The catch-all redirects
+ * unknown sub-paths back to the landing view so old links don't 404.
+ */
+export function ReportsRouter({ keywords }: Props) {
+  return (
+    <ErrorBoundary>
+      <Suspense fallback={<ReportFallback />}>
+        <Routes>
+          <Route path="/reports" element={<ReportsLandingView />} />
+          <Route
+            path="/reports/keyword"
+            element={<KeywordDeepDiveReport keywords={keywords} />}
+          />
+          <Route
+            path="/reports/keyword/:keyword"
+            element={<KeywordDeepDiveReport keywords={keywords} />}
+          />
+          <Route path="*" element={<Navigate to="/reports" replace />} />
+        </Routes>
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
