@@ -22,8 +22,8 @@ const REPORT_CATALOG: readonly ReportEntry[] = [
     description:
       'One-page rollup of overall visibility, the trend over time, top wins, top gaps, and the next three actions to take. The report a marketing lead would print before a quarterly business review.',
     audience: 'CMO, VP Marketing',
-    path: null,
-    status: 'coming-soon',
+    path: '/reports/executive-summary',
+    status: 'available',
   },
   {
     id: 'brand-visibility',
