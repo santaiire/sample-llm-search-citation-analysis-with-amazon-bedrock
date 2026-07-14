@@ -20,8 +20,9 @@ Context:
     Sub-handlers load lazily through `shared.router.HandlerLoader`
     (`_handlers`), so these tests seed `_handlers._cache['keyword-research.py']`
     with a MagicMock to assert dispatch without executing the real worker or
-    reaching AWS / AI providers. boto3 is patched and required env vars are set
-    at the import boundary so no real AWS clients are created.
+    reaching AWS / AI providers. boto3 is patched for the duration of this
+    module's tests and required env vars are set so no real AWS clients are
+    created.
 
 Test outcomes:
     - EXPECTED ON UNFIXED CODE: these tests FAIL. Async events return a 404
@@ -63,12 +64,21 @@ _API_DIR = os.path.dirname(os.path.abspath(__file__))
 os.environ.setdefault('KEYWORD_RESEARCH_TABLE', 'test-keyword-research-table')
 os.environ.setdefault('SECRETS_PREFIX', 'test-citation-analysis/')
 
-# Patch boto3 at the import boundary so no real AWS clients are created if a
-# sub-handler module is ever loaded during a test.
-_boto3_resource_patcher = patch('boto3.resource', MagicMock(name='boto3.resource'))
-_boto3_client_patcher = patch('boto3.client', MagicMock(name='boto3.client'))
-_boto3_resource_patcher.start()
-_boto3_client_patcher.start()
+
+@pytest.fixture(scope='module', autouse=True)
+def _mock_boto3():
+    """Patch boto3 for every test in this module.
+
+    Ensures no real AWS clients are created if a sub-handler module is ever
+    loaded during a test. Scoped to this module (rather than started at
+    import time and never stopped) so the patch is guaranteed to be undone
+    and cannot leak into other test modules in the same pytest session.
+    """
+    with (
+        patch('boto3.resource', MagicMock(name='boto3.resource')),
+        patch('boto3.client', MagicMock(name='boto3.client')),
+    ):
+        yield
 
 
 def _load_keyword_mgmt():
@@ -168,9 +178,7 @@ class TestAsyncDispatchProperty:
         result = mod.handler(event, None)
 
         # Assert
-        research_mock.assert_called_once_with(event, None), (
-            f"async event {event!r} was not dispatched to keyword-research handler"
-        )
+        research_mock.assert_called_once_with(event, None)
         assert result == research_mock.return_value, (
             f"async event {event!r} did not return the keyword-research result"
         )
@@ -197,9 +205,7 @@ class TestAsyncDispatchUnit:
         result = mod.handler(event, None)
 
         # Assert
-        research_mock.assert_called_once_with(event, None), (
-            'async_expand event was not dispatched to keyword-research handler'
-        )
+        research_mock.assert_called_once_with(event, None)
         assert result == research_mock.return_value, (
             'async_expand event did not return the keyword-research result'
         )
@@ -221,9 +227,7 @@ class TestAsyncDispatchUnit:
         result = mod.handler(event, None)
 
         # Assert
-        research_mock.assert_called_once_with(event, None), (
-            'async_competitor event was not dispatched to keyword-research handler'
-        )
+        research_mock.assert_called_once_with(event, None)
         assert result == research_mock.return_value, (
             'async_competitor event did not return the keyword-research result'
         )
@@ -402,12 +406,10 @@ class TestPreservationProperty:
             assert result.get('statusCode') == 404, (
                 f"non-async unmatched event {event!r} did not return not-found"
             )
-            for name, sub_mock in mocks.items():
+            for sub_mock in mocks.values():
                 sub_mock.assert_not_called()
         else:
-            mocks[expected_target].assert_called_once_with(event, None), (
-                f"non-async event {event!r} did not route to {expected_target}"
-            )
+            mocks[expected_target].assert_called_once_with(event, None)
             assert result == mocks[expected_target].return_value, (
                 f"non-async event {event!r} did not return the {expected_target} result"
             )
@@ -435,9 +437,7 @@ class TestPreservationUnit:
         result = mod.handler(event, None)
 
         # Assert
-        mocks['keyword-research.py'].assert_called_once_with(event, None), (
-            'keyword-research path was not routed to keyword-research handler'
-        )
+        mocks['keyword-research.py'].assert_called_once_with(event, None)
         assert result == mocks['keyword-research.py'].return_value, (
             'keyword-research path did not return the keyword-research result'
         )
@@ -458,9 +458,7 @@ class TestPreservationUnit:
         result = mod.handler(event, None)
 
         # Assert
-        mocks['get-keywords.py'].assert_called_once_with(event, None), (
-            'GET /api/keywords without id was not routed to get-keywords handler'
-        )
+        mocks['get-keywords.py'].assert_called_once_with(event, None)
         assert result == mocks['get-keywords.py'].return_value, (
             'GET /api/keywords did not return the get-keywords result'
         )
@@ -480,9 +478,7 @@ class TestPreservationUnit:
         result = mod.handler(event, None)
 
         # Assert
-        mocks['manage-keywords.py'].assert_called_once_with(event, None), (
-            'POST /api/keywords was not routed to manage-keywords handler'
-        )
+        mocks['manage-keywords.py'].assert_called_once_with(event, None)
         assert result == mocks['manage-keywords.py'].return_value, (
             'POST /api/keywords did not return the manage-keywords result'
         )
@@ -503,9 +499,7 @@ class TestPreservationUnit:
         result = mod.handler(event, None)
 
         # Assert
-        mocks['manage-keywords.py'].assert_called_once_with(event, None), (
-            'GET /api/keywords with id was not routed to manage-keywords handler'
-        )
+        mocks['manage-keywords.py'].assert_called_once_with(event, None)
         assert result == mocks['manage-keywords.py'].return_value, (
             'GET /api/keywords with id did not return the manage-keywords result'
         )
