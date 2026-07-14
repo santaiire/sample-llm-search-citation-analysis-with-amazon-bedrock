@@ -28,7 +28,6 @@ import importlib.util
 import logging
 import os
 import sys
-from datetime import datetime
 from typing import Any, Callable, Dict, List
 
 # Shared layer path (populated by the Lambda layer at /opt/python)
@@ -36,7 +35,7 @@ sys.path.insert(0, '/opt/python')
 
 from shared.api_response import success_response
 from shared.decorators import api_handler, validate
-from shared.utils import get_brand_config
+from shared.utils import get_brand_config, get_timestamp
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -175,7 +174,7 @@ def build_overview(
     top_recommendations = recommendations[:top]
 
     return {
-        'generated_at': datetime.utcnow().isoformat() + 'Z',
+        'generated_at': get_timestamp(),
         'period_type': period,
         'days_analyzed': days,
         'keywords_analyzed': trends.get('keywords_analyzed', 0),

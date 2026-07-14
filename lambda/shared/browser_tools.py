@@ -32,6 +32,8 @@ except ImportError:
     BEDROCK_AGENTCORE_AVAILABLE = False
     logging.warning("BedrockAgentCore SDK not available - browser features will be limited")
 
+from shared.utils import get_timestamp
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -171,7 +173,7 @@ class SimpleBrowserTools:
                     "status": "blocked",
                     "url": url,
                     "block_reason": "captcha",
-                    "timestamp": datetime.utcnow().isoformat() + 'Z',
+                    "timestamp": get_timestamp(),
                 }
             
             title = self.page.title()
@@ -180,7 +182,7 @@ class SimpleBrowserTools:
                 "status": "success",
                 "url": url,
                 "title": title,
-                "timestamp": datetime.utcnow().isoformat() + 'Z'
+                "timestamp": get_timestamp()
             }
             
         except Exception as e:
@@ -285,7 +287,7 @@ class SimpleBrowserTools:
             return {
                 "status": "success",
                 "screenshot_base64": screenshot_base64,
-                "timestamp": datetime.utcnow().isoformat() + 'Z'
+                "timestamp": get_timestamp()
             }
             
         except Exception as e:
