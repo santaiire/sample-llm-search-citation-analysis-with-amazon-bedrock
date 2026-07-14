@@ -23,6 +23,11 @@ _handlers = HandlerLoader(__file__)
 
 
 def handler(event, context):
+    # Async self-invocation events carry no resource/path and must be
+    # forwarded to the keyword-research worker before path-based routing.
+    if event.get('async_expand') or event.get('async_competitor'):
+        return _handlers.get('keyword-research.py')(event, context)
+
     resource = event.get('resource', '')
     path = event.get('path', '')
     method = event.get('httpMethod', 'GET')

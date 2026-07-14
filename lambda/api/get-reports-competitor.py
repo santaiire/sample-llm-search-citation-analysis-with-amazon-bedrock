@@ -47,7 +47,6 @@ import math
 import os
 import sys
 from collections import defaultdict
-from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 import boto3
@@ -58,7 +57,7 @@ sys.path.insert(0, '/opt/python')
 
 from shared.api_response import success_response, validation_error
 from shared.decorators import api_handler, validate
-from shared.utils import get_brand_config
+from shared.utils import get_brand_config, get_timestamp
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -304,7 +303,7 @@ def build_competitor_rollups(
                 'configured_competitors': configured,
             }
         return {
-            'generated_at': datetime.utcnow().isoformat() + 'Z',
+            'generated_at': get_timestamp(),
             'keywords_analyzed': len(keywords),
             'competitor': competitor,
             'rollup': _build_competitor_rollup(competitor, keywords, config),
@@ -314,7 +313,7 @@ def build_competitor_rollups(
         _build_competitor_rollup(c, keywords, config) for c in configured
     ]
     return {
-        'generated_at': datetime.utcnow().isoformat() + 'Z',
+        'generated_at': get_timestamp(),
         'keywords_analyzed': len(keywords),
         'competitors': configured,
         'rollups': rollups,
